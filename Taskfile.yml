@@ -1,0 +1,54 @@
+version: "3"
+
+vars:
+  MVNW: '{{if eq OS "windows"}}cmd.exe /c %CD%\\mvnw.cmd{{else}}./mvnw{{end}}'
+
+tasks:
+  build:
+    desc: Build the Ingestion Service
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - "{{.MVNW}} package -DskipTests -B"
+
+  test:
+    desc: Run tests
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - "{{.MVNW}} test -B"
+
+  lint:
+    desc: Run Maven verification checks
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - "{{.MVNW}} verify -DskipTests -B"
+
+  infra:
+    desc: Start local Docker infrastructure (Postgres, Redis, RabbitMQ)
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - docker compose up -d --wait postgres redis rabbitmq
+
+  run:
+    desc: Run the Ingestion Service locally (needs Postgres + Redis + RabbitMQ, see `task infra`)
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - "{{.MVNW}} spring-boot:run"
+
+  dev:
+    desc: Start Docker infrastructure and run the Ingestion Service with Maven
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - task: infra
+      - task: run
+
+  clean:
+    desc: Delete Maven build output
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - "{{.MVNW}} clean"
+
+  docker:
+    desc: Build the Ingestion Service Docker image (omarmohamed04/ingestion-service:dev)
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - docker build -t omarmohamed04/ingestion-service:dev .
