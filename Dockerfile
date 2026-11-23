@@ -19,6 +19,10 @@ RUN ./mvnw package -DskipTests -B
 
 # ---- runtime ----
 FROM eclipse-temurin:21-jre
+LABEL org.opencontainers.image.title="ingestion-service" \
+      org.opencontainers.image.description="Ingestion Service" \
+      org.opencontainers.image.authors="omar-shaieen" \
+      org.opencontainers.image.vendor="com.fawry"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
