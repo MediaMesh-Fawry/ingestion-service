@@ -22,7 +22,7 @@ FROM eclipse-temurin:21-jre
 LABEL org.opencontainers.image.title="ingestion-service" \
       org.opencontainers.image.description="Ingestion Service" \
       org.opencontainers.image.authors="omar-shaieen" \
-      org.opencontainers.image.vendor="com.media-mesh"
+      org.opencontainers.image.vendor="com.mediamesh"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
@@ -30,5 +30,5 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /workspace/target/*.jar app.jar
 USER ingestion-service
-EXPOSE 8080
+EXPOSE 8084
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]
