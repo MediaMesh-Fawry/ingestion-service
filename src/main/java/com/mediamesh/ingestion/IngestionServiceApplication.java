@@ -1,4 +1,4 @@
-package com.media_mesh.ingestion_service;
+package com.mediamesh.ingestion;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

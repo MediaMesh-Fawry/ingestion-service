@@ -73,6 +73,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
+      SERVER_PORT: "8084"
       DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-ingestion}
       DB_USER: ${POSTGRES_USER:-ingestion}
       DB_PASSWORD: ${POSTGRES_PASSWORD:-ingestion}
@@ -83,10 +84,14 @@ services:
       RABBIT_USER: ${RABBIT_USER:-ingestion}
       RABBIT_PASSWORD: ${RABBIT_PASSWORD:-ingestion}
       MINIO_ENDPOINT: http://minio:9000
+      MINIO_PUBLIC_ENDPOINT: http://localhost:${MINIO_PORT:-9000}
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-ingestion}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-ingestion}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-media-ingestion}
+      MINIO_PATH_STYLE: "true"
     ports:
-      - "${API_PORT:-8080}:8080"
+      - "${API_PORT:-8084}:8084"
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,7 +102,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8084/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 10
