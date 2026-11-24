@@ -1,0 +1,31 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 120
+
+[*.java]
+indent_size = 4
+continuation_indent_size = 8
+ij_java_class_count_to_use_import_on_demand = 5
+ij_java_names_count_to_use_static_import_on_demand = 3
+
+[*.{yml,yaml,json}]
+indent_size = 2
+
+[*.xml]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.cmd]
+end_of_line = crlf
+
+[{*.sh,mvnw}]
+end_of_line = lf
