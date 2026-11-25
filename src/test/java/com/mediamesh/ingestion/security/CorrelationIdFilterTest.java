@@ -3,7 +3,6 @@ package com.mediamesh.ingestion.security;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import jakarta.servlet.FilterChain;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
@@ -20,31 +19,31 @@ class CorrelationIdFilterTest {
     }
 
     @Test
-    void generatesCorrelationIdWhenHeaderMissingAndCleansMdc() throws Exception {
+    void generatesCorrelationIdWhenHeaderMissingAndClearsMdc() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest();
         MockHttpServletResponse response = new MockHttpServletResponse();
-        AtomicReference<String> insideMdc = new AtomicReference<>();
+        StringBuilder capturedMdc = new StringBuilder();
 
-        FilterChain chain = (req, res) -> insideMdc.set(MDC.get(CorrelationIdFilter.MDC_KEY));
+        FilterChain chain = (req, res) -> capturedMdc.append(MDC.get(CorrelationIdFilter.MDC_KEY));
         filter.doFilter(request, response, chain);
 
-        String header = response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER);
-        assertThat(header).isNotBlank();
-        assertThat(insideMdc.get()).isEqualTo(header);
+        String echoed = response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER);
+        assertThat(echoed).isNotBlank();
+        assertThat(capturedMdc.toString()).isEqualTo(echoed);
         assertThat(MDC.get(CorrelationIdFilter.MDC_KEY)).isNull();
     }
 
     @Test
     void propagatesAndTruncatesIncomingCorrelationId() throws Exception {
-        String oversized = "a".repeat(200);
+        String longId = "x".repeat(150);
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader(CorrelationIdFilter.CORRELATION_ID_HEADER, "  " + oversized + "  ");
+        request.addHeader(CorrelationIdFilter.CORRELATION_ID_HEADER, "  " + longId + "  ");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         filter.doFilter(request, response, (req, res) -> {});
 
         String echoed = response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER);
-        assertThat(echoed).hasSize(128).isEqualTo("a".repeat(128));
+        assertThat(echoed).hasSize(128).isEqualTo("x".repeat(128));
         assertThat(MDC.get(CorrelationIdFilter.MDC_KEY)).isNull();
     }
 }
