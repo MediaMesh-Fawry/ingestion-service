@@ -1,11 +1,9 @@
 package com.mediamesh.ingestion.common.exception;
 
 /**
- * Represents a single field-level validation failure inside
- * {@link ErrorResponse#details()}.
+ * Field-level validation failure included in RFC 7807 {@code ProblemDetail.errors} for 400 responses.
  */
 public record ValidationErrorDetail(
         String field,
-        String code,
         String message) {
 }

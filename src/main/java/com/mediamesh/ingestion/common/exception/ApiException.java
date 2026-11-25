@@ -8,8 +8,8 @@ import java.util.Objects;
 
 /**
  * Domain/application exception carrying a canonical {@link ErrorCode},
- * human-readable message, and optional field-level validation details.
- * Caught by {@link GlobalExceptionHandler} and serialized into {@link ErrorResponse}.
+ * human-readable detail message, optional field-level validation details,
+ * and optional {@code Retry-After} seconds.
  */
 public class ApiException extends RuntimeException {
     @Serial
@@ -17,23 +17,34 @@ public class ApiException extends RuntimeException {
 
     private final ErrorCode errorCode;
     private final transient List<ValidationErrorDetail> details;
+    private final Integer retryAfterSeconds;
 
     public ApiException(ErrorCode errorCode, String message) {
-        this(errorCode, message, null, null);
+        this(errorCode, message, null, null, null);
     }
 
     public ApiException(ErrorCode errorCode, String message, Throwable cause) {
-        this(errorCode, message, null, cause);
+        this(errorCode, message, null, null, cause);
     }
 
     public ApiException(ErrorCode errorCode, String message, List<ValidationErrorDetail> details) {
-        this(errorCode, message, details, null);
+        this(errorCode, message, details, null, null);
     }
 
-    private ApiException(ErrorCode errorCode, String message, List<ValidationErrorDetail> details, Throwable cause) {
+    public ApiException(ErrorCode errorCode, String message, Integer retryAfterSeconds) {
+        this(errorCode, message, null, retryAfterSeconds, null);
+    }
+
+    private ApiException(
+            ErrorCode errorCode,
+            String message,
+            List<ValidationErrorDetail> details,
+            Integer retryAfterSeconds,
+            Throwable cause) {
         super(message, cause);
         this.errorCode = Objects.requireNonNull(errorCode, "errorCode must not be null");
         this.details = details == null ? null : List.copyOf(details);
+        this.retryAfterSeconds = retryAfterSeconds;
     }
 
     public static ApiException of(ErrorCode errorCode, String message) {
@@ -49,19 +60,33 @@ public class ApiException extends RuntimeException {
     }
 
     public static ApiException uploadNotFound(Object uploadId) {
-        return new ApiException(ErrorCode.UPLOAD_NOT_FOUND, "Upload not found: " + uploadId);
+        return new ApiException(ErrorCode.NOT_FOUND, "Upload not found: " + uploadId);
     }
 
     public static ApiException mediaNotFound(Object mediaId) {
-        return new ApiException(ErrorCode.MEDIA_NOT_FOUND, "Media not found: " + mediaId);
+        return new ApiException(ErrorCode.NOT_FOUND, "Media not found: " + mediaId);
     }
 
-    public static ApiException invalidUploadState(String message) {
-        return new ApiException(ErrorCode.INVALID_UPLOAD_STATE, message);
+    public static ApiException conflict(String message) {
+        return new ApiException(ErrorCode.CONFLICT, message);
     }
 
-    public static ApiException uploadInProgress(String message) {
-        return new ApiException(ErrorCode.UPLOAD_IN_PROGRESS, message);
+    public static ApiException gone(String message) {
+        return new ApiException(ErrorCode.GONE, message);
+    }
+
+    public static ApiException maxObjectSizeExceeded(long declaredSize, long maxSize) {
+        return new ApiException(
+                ErrorCode.MAX_OBJECT_SIZE_EXCEEDED,
+                "Declared file size (" + declaredSize + " bytes) exceeds maximum allowed object size ("
+                        + maxSize + " bytes).");
+    }
+
+    public static ApiException commitInProgress(int retryAfterSeconds) {
+        return new ApiException(
+                ErrorCode.COMMIT_IN_PROGRESS,
+                "Upload commit is already in progress; retry shortly.",
+                retryAfterSeconds);
     }
 
     public static ApiException sizeMismatch(long declaredSize, long actualSize) {
@@ -70,12 +95,20 @@ public class ApiException extends RuntimeException {
                 "Uploaded object size (" + actualSize + ") does not match declared size (" + declaredSize + ").");
     }
 
-    public static ApiException partsIncomplete(String message) {
-        return new ApiException(ErrorCode.PARTS_INCOMPLETE, message);
+    public static ApiException checksumMismatch(String message) {
+        return new ApiException(ErrorCode.CHECKSUM_MISMATCH, message);
     }
 
-    public static ApiException storageProviderError(String message, Throwable cause) {
-        return new ApiException(ErrorCode.STORAGE_PROVIDER_ERROR, message, cause);
+    public static ApiException partsMissing(String message) {
+        return new ApiException(ErrorCode.PARTS_MISSING, message);
+    }
+
+    public static ApiException storageUnavailable(String message, Throwable cause) {
+        return new ApiException(ErrorCode.STORAGE_UNAVAILABLE, message, cause);
+    }
+
+    public static ApiException idempotencyKeyReused(String message) {
+        return new ApiException(ErrorCode.IDEMPOTENCY_KEY_REUSED, message);
     }
 
     public ErrorCode getErrorCode() {
@@ -92,5 +125,9 @@ public class ApiException extends RuntimeException {
 
     public List<ValidationErrorDetail> getDetails() {
         return details;
+    }
+
+    public Integer getRetryAfterSeconds() {
+        return retryAfterSeconds;
     }
 }

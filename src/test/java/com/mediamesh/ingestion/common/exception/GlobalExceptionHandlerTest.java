@@ -1,6 +1,6 @@
 package com.mediamesh.ingestion.common.exception;
 
-import com.mediamesh.ingestion.security.RequestIdFilter;
+import com.mediamesh.ingestion.security.CorrelationIdFilter;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
@@ -8,6 +8,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -23,6 +24,8 @@ import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -35,7 +38,7 @@ class GlobalExceptionHandlerTest {
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new TestController())
                 .setControllerAdvice(new GlobalExceptionHandler())
-                .addFilters(new RequestIdFilter())
+                .addFilters(new CorrelationIdFilter())
                 .build();
     }
 
@@ -45,66 +48,85 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    void apiException_sizeMismatch_returns422WithRequestIdAndTimestamp() throws Exception {
+    void apiException_sizeMismatch_returns422ProblemDetailWithCorrelationId() throws Exception {
         mockMvc.perform(get("/test/size-mismatch")
-                        .header(RequestIdFilter.REQUEST_ID_HEADER, "req-1234"))
+                        .header(CorrelationIdFilter.CORRELATION_ID_HEADER, "corr-1234"))
                 .andExpect(status().isUnprocessableContent())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(header().string(CorrelationIdFilter.CORRELATION_ID_HEADER, "corr-1234"))
+                .andExpect(jsonPath("$.type").value("https://mediamesh.local/problems/size-mismatch"))
+                .andExpect(jsonPath("$.title").value("Size Mismatch"))
+                .andExpect(jsonPath("$.status").value(422))
+                .andExpect(jsonPath("$.instance").value("/test/size-mismatch"))
                 .andExpect(jsonPath("$.code").value("SIZE_MISMATCH"))
-                .andExpect(jsonPath("$.requestId").value("req-1234"))
-                .andExpect(jsonPath("$.timestamp").isNotEmpty());
+                .andExpect(jsonPath("$.correlationId").value("corr-1234"));
     }
 
     @Test
-    void apiException_storageProviderError_returns502WithoutLeakingCause() throws Exception {
+    void apiException_storageUnavailable_returns503WithoutLeakingCause() throws Exception {
         mockMvc.perform(get("/test/provider-error"))
-                .andExpect(status().isBadGateway())
-                .andExpect(jsonPath("$.code").value("STORAGE_PROVIDER_ERROR"))
-                .andExpect(jsonPath("$.message").value("Object storage unavailable."))
-                .andExpect(jsonPath("$.requestId").isNotEmpty());
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("STORAGE_UNAVAILABLE"))
+                .andExpect(jsonPath("$.detail").value("Object storage unavailable."))
+                .andExpect(jsonPath("$.correlationId").isNotEmpty());
     }
 
     @Test
-    void validationException_returns400WithFieldDetails() throws Exception {
+    void apiException_commitInProgress_returns425WithRetryAfterHeader() throws Exception {
+        mockMvc.perform(get("/test/commit-in-progress"))
+                .andExpect(status().isTooEarly())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(header().string(HttpHeaders.RETRY_AFTER, "2"))
+                .andExpect(jsonPath("$.code").value("COMMIT_IN_PROGRESS"));
+    }
+
+    @Test
+    void validationException_returns400WithErrorsArray() throws Exception {
         mockMvc.perform(post("/test/validate")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"\",\"size\":0}"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
-                .andExpect(jsonPath("$.details").isArray())
-                .andExpect(jsonPath("$.details.length()").value(2));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.errors").isArray())
+                .andExpect(jsonPath("$.errors.length()").value(2));
     }
 
     @Test
-    void malformedJson_returns400() throws Exception {
+    void malformedJson_returns400ValidationError() throws Exception {
         mockMvc.perform(post("/test/validate")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{invalid"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("MALFORMED_JSON"));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
     }
 
     @Test
-    void missingHeader_returns400InvalidParameter() throws Exception {
+    void missingUserIdHeader_returns401Unauthorized() throws Exception {
         mockMvc.perform(get("/test/header"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_PARAMETER"))
-                .andExpect(jsonPath("$.message").value("Missing required header: X-User-Id"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
     }
 
     @Test
-    void invalidUuidPathVariable_returns400InvalidParameter() throws Exception {
+    void invalidUuidPathVariable_returns400ValidationError() throws Exception {
         mockMvc.perform(get("/test/uploads/not-a-uuid"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_PARAMETER"))
-                .andExpect(jsonPath("$.message").value("Invalid value for parameter: id"));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.detail").value("Invalid value for parameter: id"));
     }
 
     @Test
-    void unhandledException_returns500WithGenericMessage() throws Exception {
+    void unhandledException_returns500WithGenericDetail() throws Exception {
         mockMvc.perform(get("/test/boom"))
                 .andExpect(status().isInternalServerError())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.code").value("INTERNAL_SERVER_ERROR"))
-                .andExpect(jsonPath("$.message").value("An unexpected error occurred."));
+                .andExpect(jsonPath("$.detail").value("An unexpected error occurred."));
     }
 
     @RestController
@@ -118,9 +140,14 @@ class GlobalExceptionHandlerTest {
 
         @GetMapping("/provider-error")
         void providerError() {
-            throw ApiException.storageProviderError(
+            throw ApiException.storageUnavailable(
                     "Object storage unavailable.",
                     new RuntimeException("internal S3 secret detail"));
+        }
+
+        @GetMapping("/commit-in-progress")
+        void commitInProgress() {
+            throw ApiException.commitInProgress(2);
         }
 
         @PostMapping("/validate")
