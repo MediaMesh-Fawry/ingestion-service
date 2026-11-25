@@ -19,10 +19,11 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Redis-backed deduplication service for {@code Idempotency-Key} requests.
- * Scopes keys by {@code (userId, operation, idempotencyKey)}, verifies request payload
- * fingerprints, guards concurrent duplicates with an in-flight lock, and fails closed
- * with 503 if Redis is unavailable when an idempotency key is supplied.
+ * Redis-backed deduplication engine for {@code Idempotency-Key} requests,
+ * backing the {@link Idempotent} / {@link IdempotencyAspect} AOP layer.
+ * Scopes keys by {@code (operation, userId, idempotencyKey)}, verifies request
+ * payload fingerprints, guards concurrent duplicates with an in-flight lock,
+ * and fails closed with 503 if Redis is unavailable when an idempotency key is supplied.
  */
 @Slf4j
 @Service
@@ -39,7 +40,8 @@ public class IdempotencyService {
     private final IdempotencyProperties properties;
 
     /**
-     * Executes {@code action} with idempotency deduplication when {@code idempotencyKey} is non-blank.
+     * Executes {@code action} with idempotency deduplication when
+     * {@code idempotencyKey} is non-blank.
      */
     public <T> T execute(
             String operation,
@@ -63,14 +65,14 @@ public class IdempotencyService {
         String fingerprint = computeFingerprint(operation, requestPayload);
         String inProgressRecord = serializeRecord(new IdempotencyRecord(STATE_IN_PROGRESS, fingerprint, null));
 
-        if (!acquireLock(redisKey, inProgressRecord, fingerprint, responseType)) {
+        if (!acquireLock(redisKey, inProgressRecord)) {
             return handleExistingRecord(redisKey, fingerprint, responseType);
         }
 
         T result;
         try {
             result = action.get();
-        } catch (RuntimeException ex) {
+        } catch (RuntimeException | Error ex) {
             safeDelete(redisKey);
             throw ex;
         }
@@ -91,8 +93,7 @@ public class IdempotencyService {
         return result;
     }
 
-    private <T> boolean acquireLock(
-            String redisKey, String inProgressRecord, String fingerprint, Class<T> responseType) {
+    private boolean acquireLock(String redisKey, String inProgressRecord) {
         try {
             return Boolean.TRUE.equals(
                     redisTemplate.opsForValue().setIfAbsent(redisKey, inProgressRecord, properties.lockTtl()));
@@ -173,5 +174,6 @@ public class IdempotencyService {
         }
     }
 
-    private record IdempotencyRecord(String state, String fingerprint, String responseJson) {}
+    private record IdempotencyRecord(String state, String fingerprint, String responseJson) {
+    }
 }
