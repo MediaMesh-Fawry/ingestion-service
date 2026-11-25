@@ -31,8 +31,26 @@ storage:
     region: ${AWS_REGION:us-east-1}
     access-key: ${STORAGE_ACCESS_KEY:ingestion}
     secret-key: ${STORAGE_SECRET_KEY:ingestion}
-    bucket: ${STORAGE_BUCKET:media-ingestion}
+    raw-bucket: ${STORAGE_RAW_BUCKET:mediamesh-raw}
+    processed-bucket: ${STORAGE_PROCESSED_BUCKET:mediamesh-processed}
     path-style-access: ${STORAGE_PATH_STYLE:true}
+    full-object-checksum-enabled: ${STORAGE_FULL_OBJECT_CHECKSUM_ENABLED:false}
+    presign-ttl: ${STORAGE_PRESIGN_TTL:20m}
+    upload-ttl: ${STORAGE_UPLOAD_TTL:24h}
+    max-upload-lifetime: ${STORAGE_MAX_UPLOAD_LIFETIME:7d}
+    max-object-size-bytes: ${STORAGE_MAX_OBJECT_SIZE_BYTES:5497558138880}
+    header-inspect-bytes: ${STORAGE_HEADER_INSPECT_BYTES:65536}
+  cleanup:
+    enabled: ${STORAGE_CLEANUP_ENABLED:true}
+    poll-interval: ${STORAGE_CLEANUP_POLL_INTERVAL:30s}
+    batch-size: ${STORAGE_CLEANUP_BATCH_SIZE:50}
+    lease-duration: ${STORAGE_CLEANUP_LEASE_DURATION:2m}
+    stuck-commit-after: ${STORAGE_CLEANUP_STUCK_COMMIT_AFTER:5m}
+    max-backoff: ${STORAGE_CLEANUP_MAX_BACKOFF:1h}
+  idempotency:
+    ttl: ${STORAGE_IDEMPOTENCY_TTL:24h}
+    lock-ttl: ${STORAGE_IDEMPOTENCY_LOCK_TTL:60s}
+    max-key-length: ${STORAGE_IDEMPOTENCY_MAX_KEY_LENGTH:255}
 
 management:
   endpoints:
