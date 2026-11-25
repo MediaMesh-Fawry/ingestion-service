@@ -2,6 +2,7 @@ package com.mediamesh.ingestion.features.uploads.complete;
 
 import com.mediamesh.ingestion.security.IdentityHeaderResolver;
 import com.mediamesh.ingestion.storage.idempotency.Idempotent;
+import jakarta.validation.Valid;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -27,7 +28,7 @@ public class CompleteUploadController {
     public ResponseEntity<CompleteUploadResponse> completeUpload(
             @RequestHeader(IdentityHeaderResolver.USER_ID_HEADER) String userIdHeader,
             @PathVariable UUID uploadId,
-            @RequestBody(required = false) CompleteUploadRequest request) {
+            @Valid @RequestBody(required = false) CompleteUploadRequest request) {
         UUID userId = IdentityHeaderResolver.parseUserId(userIdHeader);
         return ResponseEntity.accepted().body(handler.handle(uploadId, userId, request));
     }

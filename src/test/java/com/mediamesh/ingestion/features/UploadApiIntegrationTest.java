@@ -91,6 +91,18 @@ class UploadApiIntegrationTest {
     }
 
     @Test
+    void invalidCompletePayloadReturns400ValidationError() throws Exception {
+        String tooLongChecksum = "a".repeat(129);
+        mockMvc.perform(post("/api/v1/uploads/{uploadId}/complete", UUID.randomUUID())
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedChecksum\":\"" + tooLongChecksum + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.errors[0].field").value("expectedChecksum"));
+    }
+
+    @Test
     void fullHttpUploadLifecycleInitPresignedPutPartsCompleteAndDelete() throws Exception {
         String userId = UUID.randomUUID().toString();
         String initBody = """
@@ -128,6 +140,15 @@ class UploadApiIntegrationTest {
                 new PartChecksum(Crc32cCombiner.computeBase64(part2Bytes), part2Bytes.length)));
 
         putPresigned(part1Url, part1Bytes);
+
+        mockMvc.perform(get("/api/v1/uploads/{uploadId}/parts", uploadId)
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
+                        .param("from", "2")
+                        .param("to", "2")
+                        .param("includeUploaded", "false"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.uploadedParts").isEmpty())
+                .andExpect(jsonPath("$.parts[0].partNumber").value(2));
 
         MvcResult partsResult = mockMvc.perform(get("/api/v1/uploads/{uploadId}/parts", uploadId)
                         .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
@@ -304,6 +325,44 @@ class UploadApiIntegrationTest {
 
         assertThat(replayComplete.getResponse().getContentAsString())
                 .isEqualTo(firstComplete.getResponse().getContentAsString());
+    }
+
+    @Test
+    void completeUploadRejectsMismatchedChecksum() throws Exception {
+        String userId = UUID.randomUUID().toString();
+        String initBody = """
+                {
+                  "groupId": "%s",
+                  "libraryId": "%s",
+                  "fileName": "corrupted.mp4",
+                  "contentType": "video/mp4",
+                  "fileSizeBytes": %d
+                }
+                """.formatted(UUID.randomUUID(), UUID.randomUUID(), 12L * MIB);
+
+        MvcResult initResult = mockMvc.perform(post("/api/v1/uploads/init")
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(initBody))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        JsonNode initJson = objectMapper.readTree(initResult.getResponse().getContentAsString());
+        String uploadId = initJson.get("uploadId").asString();
+        String part1Url = initJson.get("parts").get(0).get("url").asString();
+        String part2Url = initJson.get("parts").get(1).get("url").asString();
+
+        putPresigned(part1Url, mp4Bytes(8 * MIB, (byte) 0x11));
+        putPresigned(part2Url, filledBytes(4 * MIB, (byte) 0x22));
+
+        // Wrong expectedChecksum is rejected with CHECKSUM_MISMATCH
+        String wrongChecksum = Crc32cCombiner.computeBase64(new byte[] {1, 2, 3, 4});
+        mockMvc.perform(post("/api/v1/uploads/{uploadId}/complete", uploadId)
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedChecksum\":\"" + wrongChecksum + "\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("CHECKSUM_MISMATCH"));
     }
 
     private void putPresigned(String url, byte[] bytes) throws Exception {

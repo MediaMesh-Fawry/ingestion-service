@@ -2,7 +2,7 @@ package com.mediamesh.ingestion.features.uploads.complete;
 
 import com.mediamesh.ingestion.common.exception.ApiException;
 import com.mediamesh.ingestion.common.exception.ErrorCode;
-import com.mediamesh.ingestion.features.uploads.complete.CompleteUploadRequest.SubmittedPartDto;
+import com.mediamesh.ingestion.config.S3Properties;
 import com.mediamesh.ingestion.storage.PartGeometry;
 import com.mediamesh.ingestion.storage.UploadSupport;
 import com.mediamesh.ingestion.storage.events.EventPublisher;
@@ -45,6 +45,7 @@ public class CompleteUploadHandler {
     private final StorageCleanupRepository storageCleanupRepository;
     private final ObjectStorageProvider objectStorageProvider;
     private final ObjectIntegrityVerifier objectIntegrityVerifier;
+    private final S3Properties s3Properties;
     private final TransactionTemplate transactionTemplate;
     private final EventPublisher eventPublisher;
 
@@ -53,15 +54,11 @@ public class CompleteUploadHandler {
     }
 
     public CompleteUploadResponse handle(UUID uploadId, UUID userId, CompleteUploadRequest request) {
-        StorageObjectEntity entity = storageObjectRepository.findById(uploadId)
-                .orElseThrow(() -> ApiException.uploadNotFound(uploadId));
-        UploadSupport.requireOwner(entity, userId);
+        StorageObjectEntity entity = UploadSupport.requireOwnedUpload(storageObjectRepository, uploadId, userId);
 
-        String requestExpectedChecksum = request != null
+        String expectedChecksum = request != null
                 ? Crc32cCombiner.normalizeAndValidateBase64(request.expectedChecksum())
                 : null;
-        String effectiveExpectedChecksum = resolveExpectedChecksum(
-                entity.getExpectedChecksum(), requestExpectedChecksum);
 
         Instant now = Instant.now();
         boolean claimed = Boolean.TRUE.equals(transactionTemplate.execute(status ->
@@ -91,7 +88,7 @@ public class CompleteUploadHandler {
             throw ex;
         }
 
-        VerifiedParts verifiedParts = verifyUploadedParts(entity, s3Parts, request, effectiveExpectedChecksum);
+        VerifiedParts verifiedParts = verifyUploadedParts(entity, s3Parts, expectedChecksum);
 
         try {
             objectStorageProvider.completeMultipart(
@@ -99,7 +96,7 @@ public class CompleteUploadHandler {
                     entity.getObjectKey(),
                     entity.getProviderUploadId(),
                     verifiedParts.specs(),
-                    effectiveExpectedChecksum);
+                    expectedChecksum);
         } catch (ApiException ex) {
             if (ex.getErrorCode() == ErrorCode.CHECKSUM_MISMATCH) {
                 failCommitWithCleanup(entity, CleanupKind.ABORT_MP);
@@ -107,14 +104,10 @@ public class CompleteUploadHandler {
             throw ex;
         }
 
-        if (effectiveExpectedChecksum != null) {
-            entity.setExpectedChecksum(effectiveExpectedChecksum);
-        }
-
         VerifiedObject verified;
         try {
             verified = objectIntegrityVerifier.verifyCommittedObject(
-                    entity, verifiedParts.computedCompositeCrc32c());
+                    entity, verifiedParts.computedCompositeCrc32c(), expectedChecksum);
         } catch (ApiException ex) {
             if (ex.getErrorCode() != ErrorCode.STORAGE_UNAVAILABLE) {
                 failCommitWithCleanup(entity, CleanupKind.DELETE_OBJECT);
@@ -166,8 +159,7 @@ public class CompleteUploadHandler {
     private VerifiedParts verifyUploadedParts(
             StorageObjectEntity entity,
             List<UploadedPart> s3Parts,
-            CompleteUploadRequest request,
-            String effectiveExpectedChecksum) {
+            String expectedChecksum) {
         Map<Integer, UploadedPart> byPartNumber = new HashMap<>(s3Parts.size());
         for (UploadedPart part : s3Parts) {
             if (byPartNumber.putIfAbsent(part.partNumber(), part) != null) {
@@ -194,7 +186,6 @@ public class CompleteUploadHandler {
             throw ApiException.sizeMismatch(entity.getDeclaredSize(), -1L);
         }
 
-        Map<Integer, String> clientEtags = extractClientEtags(request);
         long sumBytes = 0L;
         List<CompletedPartSpec> specs = new ArrayList<>(totalParts);
         List<PartChecksum> partChecksums = new ArrayList<>(totalParts);
@@ -207,13 +198,6 @@ public class CompleteUploadHandler {
             if (part.sizeBytes() != expectedPartSize) {
                 failCommitWithCleanup(entity, CleanupKind.ABORT_MP);
                 throw ApiException.sizeMismatch(expectedPartSize, part.sizeBytes());
-            }
-
-            String clientEtag = clientEtags.get(partNumber);
-            if (clientEtag != null && !clientEtag.equals(stripQuotes(part.etag()))) {
-                failCommitWithCleanup(entity, CleanupKind.ABORT_MP);
-                throw ApiException.checksumMismatch(
-                        "Part " + partNumber + " ETag mismatch against object storage");
             }
 
             if (part.checksumCrc32c() != null && !part.checksumCrc32c().isBlank()) {
@@ -235,47 +219,21 @@ public class CompleteUploadHandler {
                 ? Crc32cCombiner.combineBase64(partChecksums)
                 : null;
 
-        if (effectiveExpectedChecksum != null
-                && computedCompositeCrc32c != null
-                && !effectiveExpectedChecksum.equals(computedCompositeCrc32c)) {
-            failCommitWithCleanup(entity, CleanupKind.ABORT_MP);
-            throw ApiException.checksumMismatch(
-                    "Combined part CRC32C (" + computedCompositeCrc32c
-                            + ") does not match expected full-object CRC32C (" + effectiveExpectedChecksum + ")");
+        if (expectedChecksum != null) {
+            if (computedCompositeCrc32c == null && !s3Properties.fullObjectChecksumEnabled()) {
+                failCommitWithCleanup(entity, CleanupKind.ABORT_MP);
+                throw ApiException.checksumMismatch(
+                        "Cannot verify expectedChecksum: object storage did not return per-part CRC32C checksums");
+            }
+            if (computedCompositeCrc32c != null && !expectedChecksum.equals(computedCompositeCrc32c)) {
+                failCommitWithCleanup(entity, CleanupKind.ABORT_MP);
+                throw ApiException.checksumMismatch(
+                        "Combined part CRC32C (" + computedCompositeCrc32c
+                                + ") does not match expected full-object CRC32C (" + expectedChecksum + ")");
+            }
         }
 
         return new VerifiedParts(specs, computedCompositeCrc32c);
-    }
-
-    private static String resolveExpectedChecksum(String initChecksum, String completeChecksum) {
-        if (initChecksum != null && completeChecksum != null && !initChecksum.equals(completeChecksum)) {
-            throw ApiException.checksumMismatch(
-                    "Completion expectedChecksum does not match checksum declared at upload init");
-        }
-        return initChecksum != null ? initChecksum : completeChecksum;
-    }
-
-    private static Map<Integer, String> extractClientEtags(CompleteUploadRequest request) {
-        if (request == null || request.parts() == null || request.parts().isEmpty()) {
-            return Map.of();
-        }
-        Map<Integer, String> map = new HashMap<>(request.parts().size());
-        for (SubmittedPartDto dto : request.parts()) {
-            if (dto.etag() != null && !dto.etag().isBlank()) {
-                map.put(dto.partNumber(), stripQuotes(dto.etag().trim()));
-            }
-        }
-        return map;
-    }
-
-    private static String stripQuotes(String value) {
-        if (value == null) {
-            return null;
-        }
-        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
-            return value.substring(1, value.length() - 1);
-        }
-        return value;
     }
 
     private void rollbackToPending(UUID uploadId) {

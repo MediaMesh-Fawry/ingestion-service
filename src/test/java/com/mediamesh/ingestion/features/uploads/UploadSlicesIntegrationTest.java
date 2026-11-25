@@ -118,7 +118,7 @@ class UploadSlicesIntegrationTest {
         CompleteUploadResponse committed = completeHandler.handle(
                 allocated.uploadId(),
                 userId,
-                new CompleteUploadRequest(null, fullCrc32c));
+                new CompleteUploadRequest(fullCrc32c));
         assertThat(committed.verifiedSizeBytes()).isEqualTo(12L * MIB);
         assertThat(committed.checksum()).isNotBlank();
         assertThat(committed.etag()).isNotBlank();
@@ -166,21 +166,19 @@ class UploadSlicesIntegrationTest {
                 new PartChecksum(Crc32cCombiner.computeBase64(part1), part1.length),
                 new PartChecksum(Crc32cCombiner.computeBase64(part2), part2.length)));
         CompleteUploadResponse committed = completeHandler.handle(
-                allocated.uploadId(), userId, new CompleteUploadRequest(null, fullCrc));
+                allocated.uploadId(), userId, new CompleteUploadRequest(fullCrc));
         assertThat(committed.verifiedSizeBytes()).isEqualTo(12L * MIB);
     }
 
     @Test
-    void completeWithTamperedPartEtagFailsAndEnqueuesAbortCleanup() throws Exception {
+    void completeWithTamperedChecksumFailsAndEnqueuesAbortCleanup() throws Exception {
         UUID userId = UUID.randomUUID();
         InitUploadResponse allocated = initHandler.handle(userId, new InitUploadRequest(
                 UUID.randomUUID(), UUID.randomUUID(), "corrupt.mp4", null, "video/mp4", 8L * MIB));
 
         putPresigned(allocated.parts().get(0).url(), mp4Bytes(8 * MIB, (byte) 0x22));
 
-        var tamperedRequest = new CompleteUploadRequest(
-                List.of(new CompleteUploadRequest.SubmittedPartDto(1, "deadbeef000000000000000000000000")),
-                null);
+        var tamperedRequest = new CompleteUploadRequest("AAAAAA==");
         assertThatThrownBy(() -> completeHandler.handle(allocated.uploadId(), userId, tamperedRequest))
                 .isInstanceOf(ApiException.class)
                 .extracting(e -> ((ApiException) e).getErrorCode())
@@ -206,7 +204,7 @@ class UploadSlicesIntegrationTest {
 
         String fullCrc = Crc32cCombiner.computeBase64(htmlPayload);
         assertThatThrownBy(() -> completeHandler.handle(
-                allocated.uploadId(), userId, new CompleteUploadRequest(null, fullCrc)))
+                allocated.uploadId(), userId, new CompleteUploadRequest(fullCrc)))
                 .isInstanceOf(ApiException.class)
                 .extracting(e -> ((ApiException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_MEDIA_CONTAINER);

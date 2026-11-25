@@ -92,9 +92,6 @@ public class StorageObjectEntity {
     @Column(name = "checksum_algorithm", length = 32)
     private String checksumAlgorithm;
 
-    @Column(name = "expected_checksum", length = 128)
-    private String expectedChecksum;
-
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 

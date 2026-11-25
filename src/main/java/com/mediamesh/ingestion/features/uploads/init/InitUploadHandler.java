@@ -13,7 +13,6 @@ import com.mediamesh.ingestion.storage.persistence.StorageObjectRepository;
 import com.mediamesh.ingestion.storage.persistence.StorageObjectStatus;
 import com.mediamesh.ingestion.storage.policy.AccessChecker;
 import com.mediamesh.ingestion.storage.provider.ObjectStorageProvider;
-import com.mediamesh.ingestion.storage.verification.Crc32cCombiner;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -50,7 +49,6 @@ public class InitUploadHandler {
                 request.fileSizeBytes(),
                 s3Properties.maxObjectSizeBytes(),
                 request.contentType());
-        String expectedChecksum = Crc32cCombiner.normalizeAndValidateBase64(request.expectedChecksum());
         PartGeometry.PartPlan plan = PartGeometry.compute(request.fileSizeBytes());
 
         UUID uploadId = UUID.randomUUID();
@@ -77,7 +75,6 @@ public class InitUploadHandler {
                     .totalParts(plan.totalParts())
                     .contentType(request.contentType())
                     .checksumAlgorithm(s3Properties.fullObjectChecksumEnabled() ? CHECKSUM_ALGORITHM_CRC32C : null)
-                    .expectedChecksum(expectedChecksum)
                     .expiresAt(expiresAt)
                     .build());
 

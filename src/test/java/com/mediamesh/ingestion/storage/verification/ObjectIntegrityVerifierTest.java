@@ -44,13 +44,13 @@ class ObjectIntegrityVerifierTest {
 
     @Test
     void verifyCommittedObject_validMp4_returnsVerifiedObject() {
-        StorageObjectEntity entity = sampleEntity("crc-expected");
+        StorageObjectEntity entity = sampleEntity();
         when(storageProvider.headObject("mediamesh-raw", entity.getObjectKey()))
                 .thenReturn(Optional.of(new ObjectMetadata(1024L, "etag-1", "crc-expected")));
         when(storageProvider.readByteRange(eq("mediamesh-raw"), eq(entity.getObjectKey()), eq(0L), anyLong()))
                 .thenReturn(new byte[] {0, 0, 0, 0x18, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'});
 
-        VerifiedObject verified = verifier.verifyCommittedObject(entity, "crc-expected");
+        VerifiedObject verified = verifier.verifyCommittedObject(entity, "crc-expected", "crc-expected");
         assertThat(verified.sizeBytes()).isEqualTo(1024L);
         assertThat(verified.etag()).isEqualTo("etag-1");
         assertThat(verified.checksum()).isEqualTo("crc-expected");
@@ -59,7 +59,7 @@ class ObjectIntegrityVerifierTest {
 
     @Test
     void verifyCommittedObject_missingObject_throwsStorageUnavailable() {
-        StorageObjectEntity entity = sampleEntity(null);
+        StorageObjectEntity entity = sampleEntity();
         when(storageProvider.headObject("mediamesh-raw", entity.getObjectKey())).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> verifier.verifyCommittedObject(entity, null))
@@ -70,7 +70,7 @@ class ObjectIntegrityVerifierTest {
 
     @Test
     void verifyCommittedObject_sizeMismatch_throwsSizeMismatch() {
-        StorageObjectEntity entity = sampleEntity(null);
+        StorageObjectEntity entity = sampleEntity();
         when(storageProvider.headObject("mediamesh-raw", entity.getObjectKey()))
                 .thenReturn(Optional.of(new ObjectMetadata(512L, "etag-1", null)));
 
@@ -82,11 +82,40 @@ class ObjectIntegrityVerifierTest {
 
     @Test
     void verifyCommittedObject_checksumMismatch_throwsChecksumMismatch() {
-        StorageObjectEntity entity = sampleEntity("expected-crc");
+        StorageObjectEntity entity = sampleEntity();
         when(storageProvider.headObject("mediamesh-raw", entity.getObjectKey()))
                 .thenReturn(Optional.of(new ObjectMetadata(1024L, "etag-1", "actual-crc")));
 
-        assertThatThrownBy(() -> verifier.verifyCommittedObject(entity, "expected-crc"))
+        assertThatThrownBy(() -> verifier.verifyCommittedObject(entity, "expected-crc", "expected-crc"))
+                .isInstanceOf(ApiException.class)
+                .extracting(ex -> ((ApiException) ex).getErrorCode())
+                .isEqualTo(ErrorCode.CHECKSUM_MISMATCH);
+    }
+
+    @Test
+    void verifyCommittedObject_expectedChecksumPresentWithoutAuthoritativeChecksum_failsClosed() {
+        S3Properties disabledFullObjectProps = new S3Properties(
+                "http://localhost:9000",
+                null,
+                "us-east-1",
+                "access",
+                "secret",
+                "mediamesh-raw",
+                "mediamesh-processed",
+                true,
+                false,
+                Duration.ofMinutes(20),
+                Duration.ofHours(24),
+                Duration.ofDays(7),
+                5_497_558_138_880L,
+                65_536);
+        ObjectIntegrityVerifier disabledVerifier =
+                new ObjectIntegrityVerifier(storageProvider, disabledFullObjectProps);
+        StorageObjectEntity entity = sampleEntity();
+        when(storageProvider.headObject("mediamesh-raw", entity.getObjectKey()))
+                .thenReturn(Optional.of(new ObjectMetadata(1024L, "etag-1", null)));
+
+        assertThatThrownBy(() -> disabledVerifier.verifyCommittedObject(entity, null, "expected-crc"))
                 .isInstanceOf(ApiException.class)
                 .extracting(ex -> ((ApiException) ex).getErrorCode())
                 .isEqualTo(ErrorCode.CHECKSUM_MISMATCH);
@@ -94,19 +123,19 @@ class ObjectIntegrityVerifierTest {
 
     @Test
     void verifyCommittedObject_invalidMediaHeader_throwsInvalidMediaContainer() {
-        StorageObjectEntity entity = sampleEntity("crc-ok");
+        StorageObjectEntity entity = sampleEntity();
         when(storageProvider.headObject("mediamesh-raw", entity.getObjectKey()))
                 .thenReturn(Optional.of(new ObjectMetadata(1024L, "etag-1", "crc-ok")));
         when(storageProvider.readByteRange(eq("mediamesh-raw"), eq(entity.getObjectKey()), eq(0L), anyLong()))
                 .thenReturn("<html>not-video</html>".getBytes(StandardCharsets.UTF_8));
 
-        assertThatThrownBy(() -> verifier.verifyCommittedObject(entity, "crc-ok"))
+        assertThatThrownBy(() -> verifier.verifyCommittedObject(entity, "crc-ok", "crc-ok"))
                 .isInstanceOf(ApiException.class)
                 .extracting(ex -> ((ApiException) ex).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_MEDIA_CONTAINER);
     }
 
-    private static StorageObjectEntity sampleEntity(String expectedChecksum) {
+    private static StorageObjectEntity sampleEntity() {
         return StorageObjectEntity.builder()
                 .uploadId(UUID.randomUUID())
                 .mediaId(UUID.randomUUID())
@@ -121,7 +150,6 @@ class ObjectIntegrityVerifierTest {
                 .partSize(1024L)
                 .totalParts(1)
                 .contentType("video/mp4")
-                .expectedChecksum(expectedChecksum)
                 .expiresAt(Instant.now().plusSeconds(3600))
                 .build();
     }

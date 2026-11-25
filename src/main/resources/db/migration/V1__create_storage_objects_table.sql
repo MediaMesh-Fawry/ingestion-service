@@ -22,7 +22,6 @@ CREATE TABLE storage_objects (
     etag               VARCHAR(128),
     checksum           VARCHAR(128),
     checksum_algorithm VARCHAR(32),
-    expected_checksum  VARCHAR(128),
     expires_at         TIMESTAMPTZ NOT NULL,
     deleted_at         TIMESTAMPTZ,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
