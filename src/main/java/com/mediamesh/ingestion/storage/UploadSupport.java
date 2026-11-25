@@ -4,6 +4,7 @@ import com.mediamesh.ingestion.common.exception.ApiException;
 import com.mediamesh.ingestion.config.S3Properties;
 import com.mediamesh.ingestion.features.uploads.PresignedPartDto;
 import com.mediamesh.ingestion.storage.persistence.StorageObjectEntity;
+import com.mediamesh.ingestion.storage.persistence.StorageObjectRepository;
 import com.mediamesh.ingestion.storage.provider.ObjectStorageProvider;
 import com.mediamesh.ingestion.storage.provider.ObjectStorageProvider.PresignedPartUrl;
 import java.util.ArrayList;
@@ -16,6 +17,17 @@ import java.util.UUID;
 public final class UploadSupport {
 
     private UploadSupport() {
+    }
+
+    /**
+     * Loads an upload session by ID and ensures the requesting user owns it.
+     */
+    public static StorageObjectEntity requireOwnedUpload(
+            StorageObjectRepository storageObjectRepository, UUID uploadId, UUID userId) {
+        StorageObjectEntity entity = storageObjectRepository.findById(uploadId)
+                .orElseThrow(() -> ApiException.uploadNotFound(uploadId));
+        requireOwner(entity, userId);
+        return entity;
     }
 
     /**

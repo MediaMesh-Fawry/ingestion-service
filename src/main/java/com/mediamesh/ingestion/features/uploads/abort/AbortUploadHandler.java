@@ -10,6 +10,7 @@ import com.mediamesh.ingestion.storage.persistence.StorageObjectRepository;
 import com.mediamesh.ingestion.storage.persistence.StorageObjectStatus;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,20 +30,11 @@ public class AbortUploadHandler {
     private final TransactionTemplate transactionTemplate;
 
     public AbortUploadResponse handle(UUID uploadId, UUID userId) {
-        StorageObjectEntity entity = storageObjectRepository.findById(uploadId)
-                .orElseThrow(() -> ApiException.uploadNotFound(uploadId));
-        UploadSupport.requireOwner(entity, userId);
+        StorageObjectEntity entity = UploadSupport.requireOwnedUpload(storageObjectRepository, uploadId, userId);
 
-        if (entity.getStatus() == StorageObjectStatus.ABORTED) {
-            return new AbortUploadResponse(uploadId, StorageObjectStatus.ABORTED.toOpenApiStatus());
-        }
-        if (entity.getStatus() == StorageObjectStatus.EXPIRED) {
-            throw ApiException.gone("Upload has already expired");
-        }
-        if (entity.getStatus() == StorageObjectStatus.COMMITTING
-                || entity.getStatus() == StorageObjectStatus.COMMITTED
-                || entity.getStatus() == StorageObjectStatus.DELETED) {
-            throw ApiException.conflict("Upload cannot be aborted in state: " + entity.getStatus());
+        Optional<AbortUploadResponse> alreadyAborted = validateAbortableOrAlreadyAborted(entity);
+        if (alreadyAborted.isPresent()) {
+            return alreadyAborted.get();
         }
 
         Instant now = Instant.now();
@@ -69,16 +61,28 @@ public class AbortUploadHandler {
         if (!transitioned) {
             StorageObjectEntity current = storageObjectRepository.findById(uploadId)
                     .orElseThrow(() -> ApiException.uploadNotFound(uploadId));
-            if (current.getStatus() == StorageObjectStatus.ABORTED) {
-                return new AbortUploadResponse(uploadId, StorageObjectStatus.ABORTED.toOpenApiStatus());
-            }
-            if (current.getStatus() == StorageObjectStatus.EXPIRED) {
-                throw ApiException.gone("Upload has already expired");
-            }
-            throw ApiException.conflict("Upload cannot be aborted in state: " + current.getStatus());
+            return validateAbortableOrAlreadyAborted(current)
+                    .orElseThrow(() -> ApiException.conflict(
+                            "Upload cannot be aborted in state: " + current.getStatus()));
         }
 
         log.info("Aborted uploadId={} mediaId={}", uploadId, entity.getMediaId());
         return new AbortUploadResponse(uploadId, StorageObjectStatus.ABORTED.toOpenApiStatus());
+    }
+
+    private Optional<AbortUploadResponse> validateAbortableOrAlreadyAborted(StorageObjectEntity entity) {
+        if (entity.getStatus() == StorageObjectStatus.ABORTED) {
+            return Optional.of(new AbortUploadResponse(
+                    entity.getUploadId(), StorageObjectStatus.ABORTED.toOpenApiStatus()));
+        }
+        if (entity.getStatus() == StorageObjectStatus.EXPIRED) {
+            throw ApiException.gone("Upload has already expired");
+        }
+        if (entity.getStatus() == StorageObjectStatus.COMMITTING
+                || entity.getStatus() == StorageObjectStatus.COMMITTED
+                || entity.getStatus() == StorageObjectStatus.DELETED) {
+            throw ApiException.conflict("Upload cannot be aborted in state: " + entity.getStatus());
+        }
+        return Optional.empty();
     }
 }

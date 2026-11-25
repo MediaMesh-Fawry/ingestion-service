@@ -3,7 +3,6 @@ package com.mediamesh.ingestion.features.uploads.abort;
 import com.mediamesh.ingestion.security.IdentityHeaderResolver;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -21,10 +20,10 @@ public class AbortUploadController {
     private final AbortUploadHandler handler;
 
     @PostMapping("/{uploadId}/abort")
-    public ResponseEntity<AbortUploadResponse> abortUpload(
+    public AbortUploadResponse abortUpload(
             @RequestHeader(IdentityHeaderResolver.USER_ID_HEADER) String userIdHeader,
             @PathVariable UUID uploadId) {
         UUID userId = IdentityHeaderResolver.parseUserId(userIdHeader);
-        return ResponseEntity.ok(handler.handle(uploadId, userId));
+        return handler.handle(uploadId, userId);
     }
 }
