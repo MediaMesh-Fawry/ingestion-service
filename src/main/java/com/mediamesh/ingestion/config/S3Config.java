@@ -15,7 +15,8 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 /**
- * Configures AWS SDK v2 {@link S3Client} and {@link S3Presigner} beans for S3-compatible storage.
+ * Configures AWS SDK v2 {@link S3Client} and {@link S3Presigner} beans for
+ * S3-compatible storage.
  */
 @Configuration
 @EnableConfigurationProperties(S3Properties.class)
@@ -27,7 +28,6 @@ public class S3Config {
                 .region(Region.of(props.region()))
                 .credentialsProvider(credentialsProvider(props))
                 .forcePathStyle(props.pathStyleAccess());
-
         if (StringUtils.hasText(props.endpoint())) {
             builder.endpointOverride(URI.create(props.endpoint()));
         }

@@ -23,10 +23,10 @@ tasks:
       - "{{.MVNW}} verify -DskipTests -B"
 
   infra:
-    desc: Start local Docker infrastructure (Postgres, Redis, RabbitMQ, MinIO)
+    desc: Start local Docker infrastructure (Postgres, Redis, RabbitMQ, RustFS)
     dir: "{{.ROOT_DIR}}"
     cmds:
-      - docker compose up -d --wait postgres redis rabbitmq minio
+      - docker compose up -d --wait postgres redis rabbitmq rustfs s3-init
 
   run:
     desc: Run the Ingestion Service locally (needs Postgres + Redis + RabbitMQ, see `task infra`)

@@ -5,11 +5,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.mediamesh.ingestion.config.S3Properties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -30,10 +32,29 @@ class IngestionServiceApplicationTests {
     @Autowired
     private S3Presigner s3Presigner;
 
+    @Autowired
+    private S3Properties s3Properties;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     @Test
-    void contextLoads() {
+    void contextLoadsAndBucketsExist() {
         assertThat(s3Client).isNotNull();
         assertThat(s3Presigner).isNotNull();
+        assertThat(s3Client.headBucket(b -> b.bucket(s3Properties.rawBucket())).sdkHttpResponse().isSuccessful())
+                .isTrue();
+        assertThat(s3Client.headBucket(b -> b.bucket(s3Properties.processedBucket())).sdkHttpResponse().isSuccessful())
+                .isTrue();
+    }
+
+    @Test
+    void flywayV1TablesExist() {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM information_schema.tables "
+                        + "WHERE table_schema = 'public' AND table_name IN ('storage_objects', 'storage_cleanup')",
+                Integer.class);
+        assertThat(count).isEqualTo(2);
     }
 
     @Test
