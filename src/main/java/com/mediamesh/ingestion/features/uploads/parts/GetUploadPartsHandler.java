@@ -33,46 +33,33 @@ public class GetUploadPartsHandler {
     private final TransactionTemplate transactionTemplate;
 
     public PartsBatchResponse handle(UUID uploadId, UUID userId, int fromPart, int toPart) {
-        if (fromPart < 1 || fromPart > toPart) {
-            throw ApiException.of(
-                    ErrorCode.VALIDATION_ERROR, "Part range must satisfy 1 <= from <= to");
-        }
-        if (toPart - fromPart + 1 > PartGeometry.MAX_PARTS_BATCH) {
-            throw ApiException.of(
-                    ErrorCode.VALIDATION_ERROR,
-                    "Requested part batch exceeds maximum of " + PartGeometry.MAX_PARTS_BATCH + " parts");
-        }
+        return handle(uploadId, userId, fromPart, toPart, true);
+    }
 
-        StorageObjectEntity entity = storageObjectRepository.findById(uploadId)
-                .orElseThrow(() -> ApiException.uploadNotFound(uploadId));
-        UploadSupport.requireOwner(entity, userId);
+    public PartsBatchResponse handle(
+            UUID uploadId, UUID userId, int fromPart, int toPart, boolean includeUploaded) {
+        validatePartRange(fromPart, toPart);
+
+        StorageObjectEntity entity = UploadSupport.requireOwnedUpload(storageObjectRepository, uploadId, userId);
 
         Instant now = Instant.now();
-        if (entity.getStatus() == StorageObjectStatus.EXPIRED
-                || entity.getStatus() == StorageObjectStatus.ABORTED
-                || (entity.getStatus() == StorageObjectStatus.PENDING && entity.getExpiresAt().isBefore(now))) {
-            throw ApiException.gone("Upload session is no longer active");
-        }
-        if (entity.getStatus() != StorageObjectStatus.PENDING) {
-            throw ApiException.conflict("Upload is not accepting parts in state: " + entity.getStatus());
-        }
-        if (toPart > entity.getTotalParts()) {
-            throw ApiException.of(
-                    ErrorCode.VALIDATION_ERROR,
-                    "Requested part " + toPart + " exceeds totalParts " + entity.getTotalParts());
-        }
+        validateUploadAcceptingParts(entity, toPart, now);
 
         Instant maxExpiresAt = entity.getCreatedAt().plus(s3Properties.maxUploadLifetime());
         Instant candidateExpiresAt = now.plus(s3Properties.uploadTtl());
-        Instant newExpiresAt = candidateExpiresAt.isAfter(maxExpiresAt) ? maxExpiresAt : candidateExpiresAt;
+        Instant newExpiresAt = candidateExpiresAt.isAfter(maxExpiresAt) ? maxExpiresAt : candidateExpiresAt; // min
+                                                                                                             // maxExpiresAt,
+                                                                                                             // candidateExpiresAt
         transactionTemplate.executeWithoutResult(
                 status -> storageObjectRepository.slideExpiresAt(uploadId, newExpiresAt, now));
 
-        List<UploadedPart> uploaded = objectStorageProvider.listParts(
-                entity.getBucket(), entity.getObjectKey(), entity.getProviderUploadId());
-        Set<Integer> uploadedPartNumbers = uploaded.stream()
-                .map(UploadedPart::partNumber)
-                .collect(Collectors.toSet());
+        Set<Integer> uploadedPartNumbers = includeUploaded
+                ? objectStorageProvider.listParts(
+                                entity.getBucket(), entity.getObjectKey(), entity.getProviderUploadId())
+                        .stream()
+                        .map(UploadedPart::partNumber)
+                        .collect(Collectors.toSet())
+                : Set.of();
 
         List<PresignedPartDto> presigned = UploadSupport.presignRange(
                 objectStorageProvider,
@@ -92,5 +79,33 @@ public class GetUploadPartsHandler {
                 entity.getPartSize(),
                 uploadedPartNumbers,
                 presigned);
+    }
+
+    private void validatePartRange(int fromPart, int toPart) {
+        if (fromPart < 1 || fromPart > toPart) {
+            throw ApiException.of(
+                    ErrorCode.VALIDATION_ERROR, "Part range must satisfy 1 <= from <= to");
+        }
+        if (toPart - fromPart + 1 > PartGeometry.MAX_PARTS_BATCH) {
+            throw ApiException.of(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Requested part batch exceeds maximum of " + PartGeometry.MAX_PARTS_BATCH + " parts");
+        }
+    }
+
+    private void validateUploadAcceptingParts(StorageObjectEntity entity, int toPart, Instant now) {
+        if (entity.getStatus() == StorageObjectStatus.EXPIRED
+                || entity.getStatus() == StorageObjectStatus.ABORTED
+                || (entity.getStatus() == StorageObjectStatus.PENDING && entity.getExpiresAt().isBefore(now))) {
+            throw ApiException.gone("Upload session is no longer active");
+        }
+        if (entity.getStatus() != StorageObjectStatus.PENDING) {
+            throw ApiException.conflict("Upload is not accepting parts in state: " + entity.getStatus());
+        }
+        if (toPart > entity.getTotalParts()) {
+            throw ApiException.of(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Requested part " + toPart + " exceeds totalParts " + entity.getTotalParts());
+        }
     }
 }

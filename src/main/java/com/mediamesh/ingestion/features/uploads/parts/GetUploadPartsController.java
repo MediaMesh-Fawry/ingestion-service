@@ -27,9 +27,10 @@ public class GetUploadPartsController {
             @RequestHeader(IdentityHeaderResolver.USER_ID_HEADER) String userIdHeader,
             @PathVariable UUID uploadId,
             @RequestParam(defaultValue = "1") int from,
-            @RequestParam(defaultValue = "20") int to) {
+            @RequestParam(defaultValue = "20") int to,
+            @RequestParam(defaultValue = "true") boolean includeUploaded) {
         UUID userId = IdentityHeaderResolver.parseUserId(userIdHeader);
-        PartsBatchResponse response = handler.handle(uploadId, userId, from, to);
+        PartsBatchResponse response = handler.handle(uploadId, userId, from, to, includeUploaded);
 
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
