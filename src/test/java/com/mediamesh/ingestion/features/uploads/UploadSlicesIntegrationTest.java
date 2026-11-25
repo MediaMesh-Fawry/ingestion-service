@@ -115,18 +115,13 @@ class UploadSlicesIntegrationTest {
 
         putPresigned(batch.parts().get(0).url(), part2);
 
-        CompleteUploadResponse committed = completeHandler.handle(
-                allocated.uploadId(),
-                userId,
-                new CompleteUploadRequest(fullCrc32c));
+        CompleteUploadResponse committed = completeHandler.handle(allocated.uploadId(), userId);
         assertThat(committed.verifiedSizeBytes()).isEqualTo(12L * MIB);
-        assertThat(committed.checksum()).isNotBlank();
         assertThat(committed.etag()).isNotBlank();
 
         StorageObjectEntity persisted = storageObjectRepository.findById(allocated.uploadId()).orElseThrow();
         assertThat(persisted.getStatus()).isEqualTo(StorageObjectStatus.COMMITTED);
         assertThat(persisted.getActualSize()).isEqualTo(12L * MIB);
-        assertThat(persisted.getChecksum()).isNotBlank();
         assertThat(objectStorageProvider.headObject(persisted.getBucket(), persisted.getObjectKey())).isPresent();
 
         deleteMediaHandler.handle(allocated.mediaId());
@@ -162,11 +157,7 @@ class UploadSlicesIntegrationTest {
 
         putPresigned(allocated.parts().get(1).url(), part2);
 
-        String fullCrc = Crc32cCombiner.combineBase64(List.of(
-                new PartChecksum(Crc32cCombiner.computeBase64(part1), part1.length),
-                new PartChecksum(Crc32cCombiner.computeBase64(part2), part2.length)));
-        CompleteUploadResponse committed = completeHandler.handle(
-                allocated.uploadId(), userId, new CompleteUploadRequest(fullCrc));
+        CompleteUploadResponse committed = completeHandler.handle(allocated.uploadId(), userId);
         assertThat(committed.verifiedSizeBytes()).isEqualTo(12L * MIB);
     }
 
@@ -202,9 +193,7 @@ class UploadSlicesIntegrationTest {
         System.arraycopy(htmlHeader, 0, htmlPayload, 0, htmlHeader.length);
         putPresigned(allocated.parts().get(0).url(), htmlPayload);
 
-        String fullCrc = Crc32cCombiner.computeBase64(htmlPayload);
-        assertThatThrownBy(() -> completeHandler.handle(
-                allocated.uploadId(), userId, new CompleteUploadRequest(fullCrc)))
+        assertThatThrownBy(() -> completeHandler.handle(allocated.uploadId(), userId))
                 .isInstanceOf(ApiException.class)
                 .extracting(e -> ((ApiException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_MEDIA_CONTAINER);

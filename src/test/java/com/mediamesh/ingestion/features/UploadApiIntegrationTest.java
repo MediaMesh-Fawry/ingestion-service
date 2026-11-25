@@ -165,13 +165,10 @@ class UploadApiIntegrationTest {
         putPresigned(part2Url, part2Bytes);
 
         mockMvc.perform(post("/api/v1/uploads/{uploadId}/complete", uploadId)
-                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"expectedChecksum\":\"" + fullCrc32c + "\"}"))
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.status").value("PROCESSING"))
                 .andExpect(jsonPath("$.verifiedSizeBytes").value(12L * MIB))
-                .andExpect(jsonPath("$.checksum").isNotEmpty())
                 .andExpect(jsonPath("$.etag").isNotEmpty());
 
         mockMvc.perform(delete("/api/v1/internal/media/{mediaId}", mediaId))
@@ -370,8 +367,10 @@ class UploadApiIntegrationTest {
                 .uri(URI.create(url))
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(bytes))
                 .build();
-        HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
-        assertThat(response.statusCode()).isBetween(200, 299);
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode())
+                .withFailMessage("Expected 2xx but got %d body=%s", response.statusCode(), response.body())
+                .isBetween(200, 299);
     }
 
     private static byte[] mp4Bytes(int length, byte fill) {

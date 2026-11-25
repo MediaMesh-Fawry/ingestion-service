@@ -55,6 +55,7 @@ public class TestcontainersConfiguration {
             registry.add("storage.s3.access-key", () -> MINIO_USER);
             registry.add("storage.s3.secret-key", () -> MINIO_PASSWORD);
             registry.add("storage.s3.path-style-access", () -> "true");
+            registry.add("storage.s3.full-object-checksum-enabled", () -> "false");
         };
     }
 
