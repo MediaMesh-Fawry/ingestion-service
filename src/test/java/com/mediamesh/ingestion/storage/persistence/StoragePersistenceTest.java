@@ -52,7 +52,9 @@ class StoragePersistenceTest {
                 .contentType("video/mp4")
                 .expiresAt(initialExpiry)
                 .build();
-        storageObjectRepository.save(created);
+        StorageObjectEntity saved = storageObjectRepository.save(created);
+        assertThat(saved.getCreatedAt()).isNotNull();
+        assertThat(saved.getUpdatedAt()).isNotNull();
 
         Instant now = Instant.now();
         int pendingRows = transactionTemplate.execute(
