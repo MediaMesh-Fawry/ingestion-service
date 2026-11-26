@@ -6,10 +6,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.mediamesh.ingestion.common.exception.ApiException;
 import com.mediamesh.ingestion.common.exception.ErrorCode;
 import com.mediamesh.ingestion.storage.verification.Crc32cCombiner.PartChecksum;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 class Crc32cCombinerTest {
 
@@ -61,5 +65,27 @@ class Crc32cCombinerTest {
                 .isInstanceOf(ApiException.class)
                 .extracting(e -> ((ApiException) e).getErrorCode())
                 .isEqualTo(ErrorCode.VALIDATION_ERROR);
+
+        assertThatThrownBy(() -> Crc32cCombiner.requireValidBase64(null, "crc32c"))
+                .isInstanceOf(ApiException.class)
+                .extracting(e -> ((ApiException) e).getErrorCode())
+                .isEqualTo(ErrorCode.CHECKSUM_REQUIRED);
+    }
+
+    @Test
+    void matchesSharedCrossLanguageVectors() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        try (InputStream is = getClass().getResourceAsStream("/crc32c-vectors.json")) {
+            assertThat(is).isNotNull();
+            JsonNode root = mapper.readTree(is);
+            for (JsonNode vec : root.get("vectors")) {
+                List<PartChecksum> parts = new ArrayList<>();
+                for (JsonNode p : vec.get("parts")) {
+                    parts.add(new PartChecksum(p.get("crc32c").asString(), p.get("lengthBytes").asLong()));
+                }
+                String actual = Crc32cCombiner.combineBase64(parts);
+                assertThat(actual).isEqualTo(vec.get("expectedCombined").asString());
+            }
+        }
     }
 }

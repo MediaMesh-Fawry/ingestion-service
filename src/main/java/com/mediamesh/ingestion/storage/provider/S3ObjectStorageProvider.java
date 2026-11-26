@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -79,7 +80,11 @@ public class S3ObjectStorageProvider implements ObjectStorageProvider {
             String providerUploadId,
             int partNumber,
             long expectedSizeBytes,
+            String crc32c,
             Duration ttl) {
+        if (crc32c == null || crc32c.isBlank()) {
+            throw ApiException.checksumRequired("crc32c is required to presign part " + partNumber);
+        }
         try {
             Instant expiresAt = Instant.now().plus(ttl);
             var uploadPartRequest = UploadPartRequest.builder()
@@ -88,19 +93,62 @@ public class S3ObjectStorageProvider implements ObjectStorageProvider {
                     .uploadId(providerUploadId)
                     .partNumber(partNumber)
                     .contentLength(expectedSizeBytes)
+                    .checksumCRC32C(crc32c)
                     .build();
             var presignRequest = UploadPartPresignRequest.builder()
                     .signatureDuration(ttl)
                     .uploadPartRequest(uploadPartRequest)
                     .build();
             PresignedUploadPartRequest presigned = s3Presigner.presignUploadPart(presignRequest);
-            return new PresignedPartUrl(presigned.url().toString(), expiresAt);
+            return new PresignedPartUrl(
+                    presigned.url().toString(),
+                    Map.of("x-amz-checksum-crc32c", crc32c),
+                    expiresAt);
         } catch (SdkException ex) {
             log.error(
                     "Failed to presign part bucket={} key={} partNumber={}",
                     bucket,
                     objectKey,
                     partNumber,
+                    ex);
+            throw ApiException.storageUnavailable("Object storage is temporarily unavailable", ex);
+        }
+    }
+
+    @Override
+    public UploadedPartsPage listPartsPage(
+            String bucket,
+            String objectKey,
+            String providerUploadId,
+            Integer partNumberMarker,
+            int maxParts) {
+        try {
+            var builder = ListPartsRequest.builder()
+                    .bucket(bucket)
+                    .key(objectKey)
+                    .uploadId(providerUploadId)
+                    .maxParts(maxParts);
+            if (partNumberMarker != null) {
+                builder.partNumberMarker(partNumberMarker);
+            }
+            var response = s3Client.listParts(builder.build());
+            List<UploadedPart> parts = response.parts().stream()
+                    .map(part -> new UploadedPart(
+                            part.partNumber(),
+                            part.size(),
+                            stripQuotes(part.eTag()),
+                            part.checksumCRC32C()))
+                    .toList();
+            return new UploadedPartsPage(
+                    parts,
+                    response.nextPartNumberMarker(),
+                    Boolean.TRUE.equals(response.isTruncated()));
+        } catch (SdkException ex) {
+            log.error(
+                    "Failed to list multipart parts page bucket={} key={} uploadId={}",
+                    bucket,
+                    objectKey,
+                    providerUploadId,
                     ex);
             throw ApiException.storageUnavailable("Object storage is temporarily unavailable", ex);
         }
