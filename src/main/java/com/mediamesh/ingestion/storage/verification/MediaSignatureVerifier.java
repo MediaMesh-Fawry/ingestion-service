@@ -2,14 +2,25 @@ package com.mediamesh.ingestion.storage.verification;
 
 import com.mediamesh.ingestion.common.exception.ApiException;
 import com.mediamesh.ingestion.common.exception.ErrorCode;
-import java.nio.charset.StandardCharsets;
-import java.util.Locale;
+import java.util.Set;
+import org.apache.tika.Tika;
+import org.apache.tika.mime.MediaType;
+import org.apache.tika.mime.MediaTypeRegistry;
 
 /**
  * Verifies that the leading bytes of an uploaded object match the container magic bytes
- * expected for its declared MIME type, preventing spoofed or corrupted payloads.
+ * expected for its declared MIME type using Apache Tika, preventing spoofed or corrupted payloads.
  */
 public final class MediaSignatureVerifier {
+
+    private static final Tika TIKA = new Tika();
+    private static final MediaTypeRegistry REGISTRY = MediaTypeRegistry.getDefaultRegistry();
+
+    private static final Set<String> MEDIA_TYPES = Set.of("video", "audio", "image");
+    private static final Set<MediaType> MEDIA_CONTAINER_APPLICATIONS = Set.of(
+            MediaType.application("ogg"),
+            MediaType.application("mp4"),
+            MediaType.application("x-matroska"));
 
     private MediaSignatureVerifier() {}
 
@@ -24,122 +35,46 @@ public final class MediaSignatureVerifier {
                     "Uploaded object is too small to contain a valid media header");
         }
 
-        String mime = normalizeMime(declaredContentType);
-        boolean valid = switch (mime) {
-            case "video/mp4", "video/quicktime", "video/x-m4v", "video/3gpp", "video/3gpp2",
-                    "audio/mp4", "audio/x-m4a", "image/avif", "image/heif", "image/heic" ->
-                    isIsoBmff(headerBytes);
-            case "video/webm", "video/x-matroska", "audio/webm", "audio/x-matroska" ->
-                    startsWith(headerBytes, 0x1A, 0x45, 0xDF, 0xA3);
-            case "video/x-msvideo", "video/avi" -> isRiffWithType(headerBytes, "AVI ");
-            case "video/ogg", "audio/ogg", "application/ogg" -> startsWithAscii(headerBytes, "OggS");
-            case "video/x-flv" -> startsWithAscii(headerBytes, "FLV");
-            case "video/mp2t" -> isMpegTs(headerBytes);
-            case "audio/mpeg", "audio/mp3" -> isMp3(headerBytes);
-            case "audio/flac" -> startsWithAscii(headerBytes, "fLaC");
-            case "audio/wav", "audio/x-wav", "audio/wave" -> isRiffWithType(headerBytes, "WAVE");
-            case "audio/aac" -> isAdts(headerBytes) || isIsoBmff(headerBytes);
-            case "image/jpeg", "image/jpg" -> startsWith(headerBytes, 0xFF, 0xD8, 0xFF);
-            case "image/png" -> startsWith(headerBytes, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A);
-            case "image/gif" -> startsWithAscii(headerBytes, "GIF87a") || startsWithAscii(headerBytes, "GIF89a");
-            case "image/webp" -> isRiffWithType(headerBytes, "WEBP");
-            case "image/bmp" -> startsWithAscii(headerBytes, "BM");
-            case "image/tiff" ->
-                    startsWith(headerBytes, 0x49, 0x49, 0x2A, 0x00)
-                            || startsWith(headerBytes, 0x4D, 0x4D, 0x00, 0x2A);
-            default -> isAnyKnownMediaSignature(headerBytes);
-        };
+        MediaType detected = MediaType.parse(TIKA.detect(headerBytes));
+        if (detected == null || MediaType.OCTET_STREAM.equals(detected.getBaseType())) {
+            throw ApiException.of(
+                    ErrorCode.INVALID_MEDIA_CONTAINER,
+                    "Uploaded object signature could not be recognized for declared contentType: "
+                            + declaredContentType);
+        }
+
+        MediaType declared = parseDeclared(declaredContentType);
+        boolean valid = declared == null ? isSupportedMedia(detected) : isCompatible(detected, declared);
 
         if (!valid) {
             throw ApiException.of(
                     ErrorCode.INVALID_MEDIA_CONTAINER,
-                    "Uploaded object signature does not match declared contentType: " + declaredContentType);
+                    "Uploaded object signature ("
+                            + detected.getBaseType()
+                            + ") does not match declared contentType: "
+                            + declaredContentType);
         }
     }
 
-    private static boolean isAnyKnownMediaSignature(byte[] b) {
-        return isIsoBmff(b)
-                || startsWith(b, 0x1A, 0x45, 0xDF, 0xA3)
-                || isRiffWithType(b, "AVI ")
-                || isRiffWithType(b, "WAVE")
-                || isRiffWithType(b, "WEBP")
-                || startsWithAscii(b, "OggS")
-                || startsWithAscii(b, "FLV")
-                || startsWithAscii(b, "fLaC")
-                || isMp3(b)
-                || startsWith(b, 0xFF, 0xD8, 0xFF)
-                || startsWith(b, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
-                || startsWithAscii(b, "GIF87a")
-                || startsWithAscii(b, "GIF89a")
-                || startsWithAscii(b, "BM");
-    }
-
-    private static boolean isIsoBmff(byte[] b) {
-        return b.length >= 12
-                && b[4] == 'f'
-                && b[5] == 't'
-                && b[6] == 'y'
-                && b[7] == 'p';
-    }
-
-    private static boolean isRiffWithType(byte[] b, String fourCc) {
-        return b.length >= 12
-                && startsWithAscii(b, "RIFF")
-                && b[8] == fourCc.charAt(0)
-                && b[9] == fourCc.charAt(1)
-                && b[10] == fourCc.charAt(2)
-                && b[11] == fourCc.charAt(3);
-    }
-
-    private static boolean isMp3(byte[] b) {
-        if (startsWithAscii(b, "ID3")) {
-            return true;
+    private static MediaType parseDeclared(String declaredContentType) {
+        if (declaredContentType == null || declaredContentType.isBlank()) {
+            return null;
         }
-        return b.length >= 2 && (b[0] & 0xFF) == 0xFF && (b[1] & 0xE0) == 0xE0;
+        MediaType parsed = MediaType.parse(declaredContentType);
+        return parsed == null ? null : parsed.getBaseType();
     }
 
-    private static boolean isAdts(byte[] b) {
-        return b.length >= 2 && (b[0] & 0xFF) == 0xFF && (b[1] & 0xF6) == 0xF0;
+    private static boolean isSupportedMedia(MediaType type) {
+        MediaType base = REGISTRY.normalize(type.getBaseType());
+        return MEDIA_TYPES.contains(base.getType()) || MEDIA_CONTAINER_APPLICATIONS.contains(base);
     }
 
-    private static boolean isMpegTs(byte[] b) {
-        if (b.length < 377) {
-            return (b[0] & 0xFF) == 0x47;
-        }
-        return (b[0] & 0xFF) == 0x47 && (b[188] & 0xFF) == 0x47;
-    }
+    private static boolean isCompatible(MediaType detected, MediaType declared) {
+        MediaType normDetected = REGISTRY.normalize(detected.getBaseType());
+        MediaType normDeclared = REGISTRY.normalize(declared.getBaseType());
 
-    private static boolean startsWith(byte[] b, int... prefix) {
-        if (b.length < prefix.length) {
-            return false;
-        }
-        for (int i = 0; i < prefix.length; i++) {
-            if ((b[i] & 0xFF) != prefix[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean startsWithAscii(byte[] b, String prefix) {
-        byte[] p = prefix.getBytes(StandardCharsets.US_ASCII);
-        if (b.length < p.length) {
-            return false;
-        }
-        for (int i = 0; i < p.length; i++) {
-            if (b[i] != p[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static String normalizeMime(String contentType) {
-        if (contentType == null) {
-            return "";
-        }
-        int semicolon = contentType.indexOf(';');
-        String base = semicolon >= 0 ? contentType.substring(0, semicolon) : contentType;
-        return base.trim().toLowerCase(Locale.ROOT);
+        return normDetected.equals(normDeclared)
+                || REGISTRY.isSpecializationOf(normDetected, normDeclared)
+                || REGISTRY.isSpecializationOf(normDeclared, normDetected);
     }
 }
