@@ -92,6 +92,13 @@ public class StorageObjectEntity {
     @Column(name = "checksum_algorithm", length = 32)
     private String checksumAlgorithm;
 
+    @Column(name = "expected_checksum", length = 16)
+    private String expectedChecksum;
+
+    @Builder.Default
+    @Column(name = "checksum_mismatch_count", nullable = false)
+    private int checksumMismatchCount = 0;
+
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 
