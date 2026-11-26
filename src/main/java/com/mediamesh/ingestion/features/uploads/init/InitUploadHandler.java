@@ -2,9 +2,7 @@ package com.mediamesh.ingestion.features.uploads.init;
 
 import com.mediamesh.ingestion.common.exception.ApiException;
 import com.mediamesh.ingestion.config.S3Properties;
-import com.mediamesh.ingestion.features.uploads.PresignedPartDto;
 import com.mediamesh.ingestion.storage.PartGeometry;
-import com.mediamesh.ingestion.storage.UploadSupport;
 import com.mediamesh.ingestion.storage.persistence.CleanupKind;
 import com.mediamesh.ingestion.storage.persistence.StorageCleanupEntity;
 import com.mediamesh.ingestion.storage.persistence.StorageCleanupRepository;
@@ -108,25 +106,15 @@ public class InitUploadHandler {
             }
         });
 
-        int initialPresignCount = Math.min(PartGeometry.INIT_PRESIGN_CAP, plan.totalParts());
-        List<PresignedPartDto> initialParts = UploadSupport.presignRange(
-                objectStorageProvider,
-                s3Properties,
-                bucket,
-                objectKey,
-                providerUploadId,
-                request.fileSizeBytes(),
-                plan.partSizeBytes(),
-                plan.totalParts(),
-                1,
-                initialPresignCount);
+        int recommendedConcurrency = PartGeometry.recommendedConcurrency(plan.partSizeBytes());
 
         log.info(
-                "Allocated uploadId={} mediaId={} totalParts={} partSizeBytes={}",
+                "Allocated uploadId={} mediaId={} totalParts={} partSizeBytes={} recommendedConcurrency={}",
                 uploadId,
                 mediaId,
                 plan.totalParts(),
-                plan.partSizeBytes());
+                plan.partSizeBytes(),
+                recommendedConcurrency);
 
         return new InitUploadResponse(
                 uploadId,
@@ -134,7 +122,7 @@ public class InitUploadHandler {
                 StorageObjectStatus.PENDING.toOpenApiStatus(),
                 plan.partSizeBytes(),
                 plan.totalParts(),
-                expiresAt,
-                initialParts);
+                recommendedConcurrency,
+                expiresAt);
     }
 }
