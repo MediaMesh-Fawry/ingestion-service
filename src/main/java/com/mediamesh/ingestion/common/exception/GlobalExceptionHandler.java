@@ -24,6 +24,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Centralized {@link RestControllerAdvice} translating domain, validation,
@@ -48,6 +49,7 @@ public class GlobalExceptionHandler {
                 ex.getErrorCode(),
                 ex.getMessage(),
                 ex.getDetails(),
+                ex.getProperties(),
                 ex.getRetryAfterSeconds(),
                 correlationId,
                 request);
@@ -139,6 +141,7 @@ public class GlobalExceptionHandler {
                 "An unexpected error occurred.",
                 null,
                 null,
+                null,
                 correlationId,
                 request);
     }
@@ -150,13 +153,14 @@ public class GlobalExceptionHandler {
             HttpServletRequest request) {
         String correlationId = CorrelationIdFilter.getCurrentCorrelationId();
         log.warn("Request rejected [{}]: {} (correlationId={})", errorCode.getCode(), detail, correlationId);
-        return buildResponse(errorCode, detail, errors, null, correlationId, request);
+        return buildResponse(errorCode, detail, errors, null, null, correlationId, request);
     }
 
     private ResponseEntity<ProblemDetail> buildResponse(
             ErrorCode errorCode,
             String detail,
             List<ValidationErrorDetail> errors,
+            Map<String, Object> extraProperties,
             Integer retryAfterSeconds,
             String correlationId,
             HttpServletRequest request) {
@@ -170,6 +174,9 @@ public class GlobalExceptionHandler {
         problem.setProperty("correlationId", correlationId);
         if (errors != null && !errors.isEmpty()) {
             problem.setProperty("errors", errors);
+        }
+        if (extraProperties != null && !extraProperties.isEmpty()) {
+            extraProperties.forEach(problem::setProperty);
         }
 
         ResponseEntity.BodyBuilder builder = ResponseEntity

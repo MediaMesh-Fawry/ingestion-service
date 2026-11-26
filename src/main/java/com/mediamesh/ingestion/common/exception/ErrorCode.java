@@ -10,6 +10,7 @@ import java.net.URI;
 public enum ErrorCode {
 
     VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Validation Error", "validation-error"),
+    CHECKSUM_REQUIRED(HttpStatus.BAD_REQUEST, "CHECKSUM_REQUIRED", "Checksum Required", "checksum-required"),
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Unauthorized", "unauthorized"),
     FORBIDDEN(HttpStatus.FORBIDDEN, "FORBIDDEN", "Forbidden", "forbidden"),
     NOT_FOUND(HttpStatus.NOT_FOUND, "NOT_FOUND", "Not Found", "not-found"),
@@ -23,6 +24,8 @@ public enum ErrorCode {
     SIZE_MISMATCH(HttpStatus.UNPROCESSABLE_CONTENT, "SIZE_MISMATCH", "Size Mismatch", "size-mismatch"),
     CHECKSUM_MISMATCH(HttpStatus.UNPROCESSABLE_CONTENT, "CHECKSUM_MISMATCH",
             "Checksum Mismatch", "checksum-mismatch"),
+    COMPOSITE_CHECKSUM_INVALID(HttpStatus.UNPROCESSABLE_CONTENT, "COMPOSITE_CHECKSUM_INVALID",
+            "Composite Checksum Invalid", "composite-checksum-invalid"),
     PARTS_MISSING(HttpStatus.UNPROCESSABLE_CONTENT, "PARTS_MISSING", "Parts Missing", "parts-missing"),
     INVALID_MEDIA_CONTAINER(HttpStatus.UNPROCESSABLE_CONTENT, "INVALID_MEDIA_CONTAINER",
             "Invalid Media Container", "invalid-media-container"),

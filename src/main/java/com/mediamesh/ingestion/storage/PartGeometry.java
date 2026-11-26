@@ -6,19 +6,23 @@ import java.util.Locale;
 import java.util.UUID;
 
 /**
- * Multipart geometry calculator, upload request validator, and opaque S3 key generator.
+ * Multipart geometry calculator, upload request validator, and opaque S3 key
+ * generator.
  */
 public final class PartGeometry {
 
     public static final long MIN_PART_SIZE_BYTES = 8L * 1024 * 1024;
     public static final int MAX_PARTS = 10_000;
-    public static final int INIT_PRESIGN_CAP = 20;
-    public static final int MAX_PARTS_BATCH = 100;
+    public static final int MAX_PRESIGN_PARTS = 8;
+    public static final int MAX_LIST_PARTS_PAGE = 1000;
+    private static final long MIB = 1024L * 1024L;
 
-    private PartGeometry() {}
+    private PartGeometry() {
+    }
 
     /**
-     * Validates declared size and MIME content type against service limits and media allowlist.
+     * Validates declared size and MIME content type against service limits and
+     * media allowlist.
      */
     public static void validateUploadRequest(
             long declaredSizeBytes, long maxObjectSizeBytes, String contentType) {
@@ -40,7 +44,8 @@ public final class PartGeometry {
     }
 
     /**
-     * Computes an 8 MiB-aligned part size and total part count capped at {@value #MAX_PARTS}.
+     * Computes an 8 MiB-aligned part size and total part count capped at
+     * {@value #MAX_PARTS}.
      */
     public static PartPlan compute(long declaredSizeBytes) {
         if (declaredSizeBytes <= 0) {
@@ -69,7 +74,8 @@ public final class PartGeometry {
     }
 
     /**
-     * Generates an opaque raw object key without ever embedding user-supplied filenames.
+     * Generates an opaque raw object key without ever embedding user-supplied
+     * filenames.
      */
     public static String rawObjectKey(UUID groupId, UUID mediaId) {
         return "raw/" + groupId + "/" + mediaId;
@@ -94,6 +100,20 @@ public final class PartGeometry {
                 || mime.startsWith("image/");
     }
 
+    /**
+     * Returns recommended client upload concurrency based on part size to bound browser memory.
+     */
+    public static int recommendedConcurrency(long partSizeBytes) {
+        if (partSizeBytes <= 64L * MIB) {
+            return 4;
+        }
+        if (partSizeBytes <= 256L * MIB) {
+            return 2;
+        }
+        return 1;
+    }
+
     /** Computed multipart geometry. */
-    public record PartPlan(long partSizeBytes, int totalParts) {}
+    public record PartPlan(long partSizeBytes, int totalParts) {
+    }
 }

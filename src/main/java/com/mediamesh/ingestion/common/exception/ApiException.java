@@ -4,12 +4,13 @@ import org.springframework.http.HttpStatus;
 
 import java.io.Serial;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
  * Domain/application exception carrying a canonical {@link ErrorCode},
  * human-readable detail message, optional field-level validation details,
- * and optional {@code Retry-After} seconds.
+ * optional extra ProblemDetail properties, and optional {@code Retry-After} seconds.
  */
 public class ApiException extends RuntimeException {
     @Serial
@@ -17,33 +18,36 @@ public class ApiException extends RuntimeException {
 
     private final ErrorCode errorCode;
     private final transient List<ValidationErrorDetail> details;
+    private final transient Map<String, Object> properties;
     private final Integer retryAfterSeconds;
 
     public ApiException(ErrorCode errorCode, String message) {
-        this(errorCode, message, null, null, null);
+        this(errorCode, message, null, null, null, null);
     }
 
     public ApiException(ErrorCode errorCode, String message, Throwable cause) {
-        this(errorCode, message, null, null, cause);
+        this(errorCode, message, null, null, null, cause);
     }
 
     public ApiException(ErrorCode errorCode, String message, List<ValidationErrorDetail> details) {
-        this(errorCode, message, details, null, null);
+        this(errorCode, message, details, null, null, null);
     }
 
     public ApiException(ErrorCode errorCode, String message, Integer retryAfterSeconds) {
-        this(errorCode, message, null, retryAfterSeconds, null);
+        this(errorCode, message, null, null, retryAfterSeconds, null);
     }
 
     private ApiException(
             ErrorCode errorCode,
             String message,
             List<ValidationErrorDetail> details,
+            Map<String, Object> properties,
             Integer retryAfterSeconds,
             Throwable cause) {
         super(message, cause);
         this.errorCode = Objects.requireNonNull(errorCode, "errorCode must not be null");
         this.details = details == null ? null : List.copyOf(details);
+        this.properties = properties == null ? null : Map.copyOf(properties);
         this.retryAfterSeconds = retryAfterSeconds;
     }
 
@@ -95,12 +99,46 @@ public class ApiException extends RuntimeException {
                 "Uploaded object size (" + actualSize + ") does not match declared size (" + declaredSize + ").");
     }
 
+    public static ApiException checksumRequired(String message) {
+        return new ApiException(ErrorCode.CHECKSUM_REQUIRED, message);
+    }
+
     public static ApiException checksumMismatch(String message) {
         return new ApiException(ErrorCode.CHECKSUM_MISMATCH, message);
     }
 
+    public static ApiException checksumMismatch(String message, List<Integer> badParts) {
+        return new ApiException(
+                ErrorCode.CHECKSUM_MISMATCH,
+                message,
+                null,
+                Map.of("badParts", List.copyOf(badParts)),
+                null,
+                null);
+    }
+
+    public static ApiException compositeChecksumInvalid(String message) {
+        return new ApiException(
+                ErrorCode.COMPOSITE_CHECKSUM_INVALID,
+                message,
+                null,
+                Map.of("badParts", List.of()),
+                null,
+                null);
+    }
+
     public static ApiException partsMissing(String message) {
         return new ApiException(ErrorCode.PARTS_MISSING, message);
+    }
+
+    public static ApiException partsMissing(String message, List<Integer> missingParts) {
+        return new ApiException(
+                ErrorCode.PARTS_MISSING,
+                message,
+                null,
+                Map.of("missingParts", List.copyOf(missingParts)),
+                null,
+                null);
     }
 
     public static ApiException storageUnavailable(String message, Throwable cause) {
@@ -125,6 +163,10 @@ public class ApiException extends RuntimeException {
 
     public List<ValidationErrorDetail> getDetails() {
         return details;
+    }
+
+    public Map<String, Object> getProperties() {
+        return properties;
     }
 
     public Integer getRetryAfterSeconds() {

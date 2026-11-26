@@ -91,15 +91,45 @@ class UploadApiIntegrationTest {
     }
 
     @Test
-    void invalidCompletePayloadReturns400ValidationError() throws Exception {
+    void missingChecksumOnCompleteOrPresignReturns400ChecksumRequired() throws Exception {
+        String userId = UUID.randomUUID().toString();
+
+        // /complete with no body -> CHECKSUM_REQUIRED
+        mockMvc.perform(post("/api/v1/uploads/{uploadId}/complete", UUID.randomUUID())
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("CHECKSUM_REQUIRED"));
+
+        // /complete with invalid checksum length -> VALIDATION_ERROR
         String tooLongChecksum = "a".repeat(129);
         mockMvc.perform(post("/api/v1/uploads/{uploadId}/complete", UUID.randomUUID())
-                        .header(IdentityHeaderResolver.USER_ID_HEADER, UUID.randomUUID().toString())
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"expectedChecksum\":\"" + tooLongChecksum + "\"}"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
-                .andExpect(jsonPath("$.errors[0].field").value("expectedChecksum"));
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        // /presign with missing crc32c -> CHECKSUM_REQUIRED
+        mockMvc.perform(post("/api/v1/uploads/{uploadId}/parts/presign", UUID.randomUUID())
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"parts\":[{\"partNumber\":1}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("CHECKSUM_REQUIRED"));
+
+        // /presign with duplicate partNumber -> VALIDATION_ERROR
+        String validCrc = Crc32cCombiner.computeBase64(new byte[] {1, 2, 3, 4});
+        mockMvc.perform(post("/api/v1/uploads/{uploadId}/parts/presign", UUID.randomUUID())
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"parts":[
+                                  {"partNumber":1,"crc32c":"%s"},
+                                  {"partNumber":1,"crc32c":"%s"}
+                                ]}
+                                """.formatted(validCrc, validCrc)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
     }
 
     @Test
@@ -126,49 +156,55 @@ class UploadApiIntegrationTest {
                 .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(jsonPath("$.status").value("UPLOADING"))
                 .andExpect(jsonPath("$.totalParts").value(2))
+                .andExpect(jsonPath("$.recommendedConcurrency").value(4))
+                .andExpect(jsonPath("$.parts").doesNotExist())
                 .andReturn();
 
         JsonNode initJson = objectMapper.readTree(initResult.getResponse().getContentAsString());
         String uploadId = initJson.get("uploadId").asString();
         String mediaId = initJson.get("mediaId").asString();
-        String part1Url = initJson.get("parts").get(0).get("url").asString();
 
         byte[] part1Bytes = mp4Bytes(8 * MIB, (byte) 0x11);
         byte[] part2Bytes = filledBytes(4 * MIB, (byte) 0x22);
+        String crc1 = Crc32cCombiner.computeBase64(part1Bytes);
+        String crc2 = Crc32cCombiner.computeBase64(part2Bytes);
         String fullCrc32c = Crc32cCombiner.combineBase64(List.of(
-                new PartChecksum(Crc32cCombiner.computeBase64(part1Bytes), part1Bytes.length),
-                new PartChecksum(Crc32cCombiner.computeBase64(part2Bytes), part2Bytes.length)));
+                new PartChecksum(crc1, part1Bytes.length),
+                new PartChecksum(crc2, part2Bytes.length)));
 
-        putPresigned(part1Url, part1Bytes);
+        String part1Url = presignPart(userId, uploadId, 1, crc1);
+        putPresigned(part1Url, part1Bytes, crc1);
 
+        // Resume listing returns uploaded parts with size, no presigned URLs
         mockMvc.perform(get("/api/v1/uploads/{uploadId}/parts", uploadId)
-                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
-                        .param("from", "2")
-                        .param("to", "2")
-                        .param("includeUploaded", "false"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.uploadedParts").isEmpty())
-                .andExpect(jsonPath("$.parts[0].partNumber").value(2));
-
-        MvcResult partsResult = mockMvc.perform(get("/api/v1/uploads/{uploadId}/parts", uploadId)
-                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
-                        .param("from", "2")
-                        .param("to", "2"))
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", "no-store"))
-                .andExpect(jsonPath("$.uploadedParts[0]").value(1))
-                .andReturn();
+                .andExpect(jsonPath("$.uploadedParts[0].partNumber").value(1))
+                .andExpect(jsonPath("$.uploadedParts[0].size").value(8L * MIB))
+                .andExpect(jsonPath("$.uploadedParts[0].url").doesNotExist());
 
-        JsonNode partsJson = objectMapper.readTree(partsResult.getResponse().getContentAsString());
-        String part2Url = partsJson.get("parts").get(0).get("url").asString();
+        String part2Url = presignPart(userId, uploadId, 2, crc2);
+        putPresigned(part2Url, part2Bytes, crc2);
 
-        putPresigned(part2Url, part2Bytes);
+        String completeBody = """
+                {
+                  "expectedChecksum": "%s",
+                  "parts": [
+                    {"partNumber": 1, "crc32c": "%s"},
+                    {"partNumber": 2, "crc32c": "%s"}
+                  ]
+                }
+                """.formatted(fullCrc32c, crc1, crc2);
 
         mockMvc.perform(post("/api/v1/uploads/{uploadId}/complete", uploadId)
-                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId))
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(completeBody))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.status").value("PROCESSING"))
                 .andExpect(jsonPath("$.verifiedSizeBytes").value(12L * MIB))
+                .andExpect(jsonPath("$.checksum").value(fullCrc32c))
                 .andExpect(jsonPath("$.etag").isNotEmpty());
 
         mockMvc.perform(delete("/api/v1/internal/media/{mediaId}", mediaId))
@@ -250,7 +286,6 @@ class UploadApiIntegrationTest {
         assertThat(replayJson.get("mediaId").asString()).isEqualTo(firstJson.get("mediaId").asString());
         assertThat(replay.getResponse().getHeader("Location")).isEqualTo(first.getResponse().getHeader("Location"));
 
-        // Different payload with the same Idempotency-Key -> 422 IDEMPOTENCY_KEY_REUSED
         String differentBody = """
                 {
                   "groupId": "%s",
@@ -269,7 +304,6 @@ class UploadApiIntegrationTest {
                 .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
 
-        // Same Idempotency-Key for a different user is isolated and allocates a new upload
         MvcResult otherUserResult = mockMvc.perform(post("/api/v1/uploads/init")
                         .header(IdentityHeaderResolver.USER_ID_HEADER, otherUserId)
                         .header(IdentityHeaderResolver.IDEMPOTENCY_KEY_HEADER, idempotencyKey)
@@ -302,21 +336,32 @@ class UploadApiIntegrationTest {
                 .andExpect(status().isCreated())
                 .andReturn();
 
-        JsonNode initJson = objectMapper.readTree(initResult.getResponse().getContentAsString());
-        String uploadId = initJson.get("uploadId").asString();
-        String part1Url = initJson.get("parts").get(0).get("url").asString();
-        putPresigned(part1Url, mp4Bytes(2 * MIB, (byte) 0x33));
+        String uploadId = objectMapper.readTree(initResult.getResponse().getContentAsString())
+                .get("uploadId").asString();
+        byte[] bytes = mp4Bytes(2 * MIB, (byte) 0x33);
+        String crc = Crc32cCombiner.computeBase64(bytes);
+
+        String part1Url = presignPart(userId, uploadId, 1, crc);
+        putPresigned(part1Url, bytes, crc);
+
+        String completeBody = """
+                {"expectedChecksum":"%s","parts":[{"partNumber":1,"crc32c":"%s"}]}
+                """.formatted(crc, crc);
 
         String completeKey = "complete-" + UUID.randomUUID();
         MvcResult firstComplete = mockMvc.perform(post("/api/v1/uploads/{uploadId}/complete", uploadId)
                         .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
-                        .header(IdentityHeaderResolver.IDEMPOTENCY_KEY_HEADER, completeKey))
+                        .header(IdentityHeaderResolver.IDEMPOTENCY_KEY_HEADER, completeKey)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(completeBody))
                 .andExpect(status().isAccepted())
                 .andReturn();
 
         MvcResult replayComplete = mockMvc.perform(post("/api/v1/uploads/{uploadId}/complete", uploadId)
                         .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
-                        .header(IdentityHeaderResolver.IDEMPOTENCY_KEY_HEADER, completeKey))
+                        .header(IdentityHeaderResolver.IDEMPOTENCY_KEY_HEADER, completeKey)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(completeBody))
                 .andExpect(status().isAccepted())
                 .andReturn();
 
@@ -325,7 +370,7 @@ class UploadApiIntegrationTest {
     }
 
     @Test
-    void completeUploadRejectsMismatchedChecksum() throws Exception {
+    void completeUploadRejectsMismatchedCompositeChecksumWithBadPartsEmpty() throws Exception {
         String userId = UUID.randomUUID().toString();
         String initBody = """
                 {
@@ -344,27 +389,54 @@ class UploadApiIntegrationTest {
                 .andExpect(status().isCreated())
                 .andReturn();
 
-        JsonNode initJson = objectMapper.readTree(initResult.getResponse().getContentAsString());
-        String uploadId = initJson.get("uploadId").asString();
-        String part1Url = initJson.get("parts").get(0).get("url").asString();
-        String part2Url = initJson.get("parts").get(1).get("url").asString();
+        String uploadId = objectMapper.readTree(initResult.getResponse().getContentAsString())
+                .get("uploadId").asString();
 
-        putPresigned(part1Url, mp4Bytes(8 * MIB, (byte) 0x11));
-        putPresigned(part2Url, filledBytes(4 * MIB, (byte) 0x22));
+        byte[] p1 = mp4Bytes(8 * MIB, (byte) 0x11);
+        byte[] p2 = filledBytes(4 * MIB, (byte) 0x22);
+        String crc1 = Crc32cCombiner.computeBase64(p1);
+        String crc2 = Crc32cCombiner.computeBase64(p2);
 
-        // Wrong expectedChecksum is rejected with CHECKSUM_MISMATCH
+        putPresigned(presignPart(userId, uploadId, 1, crc1), p1, crc1);
+        putPresigned(presignPart(userId, uploadId, 2, crc2), p2, crc2);
+
         String wrongChecksum = Crc32cCombiner.computeBase64(new byte[] {1, 2, 3, 4});
         mockMvc.perform(post("/api/v1/uploads/{uploadId}/complete", uploadId)
                         .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"expectedChecksum\":\"" + wrongChecksum + "\"}"))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("CHECKSUM_MISMATCH"));
+                        .content("""
+                                {
+                                  "expectedChecksum": "%s",
+                                  "parts": [
+                                    {"partNumber": 1, "crc32c": "%s"},
+                                    {"partNumber": 2, "crc32c": "%s"}
+                                  ]
+                                }
+                                """.formatted(wrongChecksum, crc1, crc2)))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("COMPOSITE_CHECKSUM_INVALID"))
+                .andExpect(jsonPath("$.badParts").isEmpty());
     }
 
-    private void putPresigned(String url, byte[] bytes) throws Exception {
+    private String presignPart(String userId, String uploadId, int partNumber, String crc32c) throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/v1/uploads/{uploadId}/parts/presign", uploadId)
+                        .header(IdentityHeaderResolver.USER_ID_HEADER, userId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"parts":[{"partNumber":%d,"crc32c":"%s"}]}
+                                """.formatted(partNumber, crc32c)))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.parts[0].headers['x-amz-checksum-crc32c']").value(crc32c))
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString())
+                .get("parts").get(0).get("url").asString();
+    }
+
+    private void putPresigned(String url, byte[] bytes, String crc32c) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
+                .header("x-amz-checksum-crc32c", crc32c)
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(bytes))
                 .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());

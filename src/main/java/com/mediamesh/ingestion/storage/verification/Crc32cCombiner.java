@@ -19,6 +19,29 @@ public final class Crc32cCombiner {
     private Crc32cCombiner() {}
 
     /**
+     * Validates that a required client-supplied checksum is present and a valid Base64-encoded
+     * 32-bit CRC32C, returning its canonical Base64 representation.
+     */
+    public static String requireValidBase64(String base64, String fieldName) {
+        if (base64 == null || base64.isBlank()) {
+            throw ApiException.checksumRequired(fieldName + " is required");
+        }
+        try {
+            byte[] decoded = Base64.getDecoder().decode(base64.trim());
+            if (decoded.length != 4) {
+                throw ApiException.of(
+                        ErrorCode.VALIDATION_ERROR,
+                        fieldName + " must be a Base64-encoded 4-byte CRC32C value");
+            }
+            return Base64.getEncoder().encodeToString(decoded);
+        } catch (IllegalArgumentException ex) {
+            throw ApiException.of(
+                    ErrorCode.VALIDATION_ERROR,
+                    fieldName + " is not valid Base64");
+        }
+    }
+
+    /**
      * Validates that a client-supplied checksum is a valid Base64-encoded 32-bit CRC32C
      * and returns its canonical Base64 representation.
      */

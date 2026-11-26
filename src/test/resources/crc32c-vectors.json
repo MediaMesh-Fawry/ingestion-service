@@ -1,0 +1,29 @@
+{
+  "description": "Cross-language test vectors for Crc32cCombiner (GF(2) crc32c_combine) to verify TypeScript port against Java.",
+  "vectors": [
+    {
+      "name": "single-part",
+      "parts": [
+        { "crc32c": "AAAAAA==", "lengthBytes": 8388608 }
+      ],
+      "expectedCombined": "AAAAAA=="
+    },
+    {
+      "name": "two-parts-8mib-and-4mib",
+      "parts": [
+        { "crc32c": "ESIzRA==", "lengthBytes": 8388608 },
+        { "crc32c": "VXZ3eA==", "lengthBytes": 4194304 }
+      ],
+      "expectedCombined": "VFmAzQ=="
+    },
+    {
+      "name": "three-unaligned-parts",
+      "parts": [
+        { "crc32c": "AQIDBA==", "lengthBytes": 8388608 },
+        { "crc32c": "BQYHCA==", "lengthBytes": 3145865 },
+        { "crc32c": "CQoLDA==", "lengthBytes": 17 }
+      ],
+      "expectedCombined": "nDDRzA=="
+    }
+  ]
+}

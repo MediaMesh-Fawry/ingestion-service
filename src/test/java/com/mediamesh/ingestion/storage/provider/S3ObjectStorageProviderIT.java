@@ -69,15 +69,21 @@ class S3ObjectStorageProviderIT {
                 new PartChecksum(crc2, part2Bytes.length)));
 
         PresignedPartUrl part1Url = storageProvider.presignPart(
-                bucket, key, uploadId, 1, part1Bytes.length, Duration.ofMinutes(5));
+                bucket, key, uploadId, 1, part1Bytes.length, crc1, Duration.ofMinutes(5));
         PresignedPartUrl part2Url = storageProvider.presignPart(
-                bucket, key, uploadId, 2, part2Bytes.length, Duration.ofMinutes(5));
+                bucket, key, uploadId, 2, part2Bytes.length, crc2, Duration.ofMinutes(5));
         assertThat(part1Url.url()).startsWith("http");
+        assertThat(part1Url.headers()).containsEntry("x-amz-checksum-crc32c", crc1);
         assertThat(part1Url.expiresAt()).isAfter(Instant.now());
 
         // Mismatched Content-Length is rejected at the storage edge
         HttpResponse<String> badSizeResponse = putPresignedPartRaw(part1Url.url(), filledBytes(1024, (byte) 0x11), crc1);
         assertThat(badSizeResponse.statusCode()).isBetween(400, 499);
+
+        // Corrupted bytes with signed CRC32C header are rejected at the storage edge
+        byte[] corruptedPart1 = filledBytes(8 * MIB, (byte) 0x99);
+        HttpResponse<String> badDigestResponse = putPresignedPartRaw(part1Url.url(), corruptedPart1, crc1);
+        assertThat(badDigestResponse.statusCode()).isBetween(400, 499);
 
         String putEtag1 = putPresignedPart(part1Url.url(), part1Bytes, crc1);
         String putEtag2 = putPresignedPart(part2Url.url(), part2Bytes, crc2);
@@ -123,10 +129,11 @@ class S3ObjectStorageProviderIT {
         String key = "it/" + UUID.randomUUID() + "/aborted.mp4";
 
         String uploadId = storageProvider.createMultipart(bucket, key, "video/mp4");
-        PresignedPartUrl part1Url = storageProvider.presignPart(
-                bucket, key, uploadId, 1, 1024L, Duration.ofMinutes(5));
         byte[] bytes = filledBytes(1024, (byte) 0x33);
-        putPresignedPart(part1Url.url(), bytes, Crc32cCombiner.computeBase64(bytes));
+        String crc = Crc32cCombiner.computeBase64(bytes);
+        PresignedPartUrl part1Url = storageProvider.presignPart(
+                bucket, key, uploadId, 1, 1024L, crc, Duration.ofMinutes(5));
+        putPresignedPart(part1Url.url(), bytes, crc);
 
         storageProvider.abortMultipart(bucket, key, uploadId);
         assertThat(storageProvider.listMultipartUploads(bucket, key)).doesNotContain(uploadId);
@@ -169,6 +176,7 @@ class S3ObjectStorageProviderIT {
     private HttpResponse<String> putPresignedPartRaw(String url, byte[] bytes, String crc32cBase64) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
+                .header("x-amz-checksum-crc32c", crc32cBase64)
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(bytes))
                 .build();
         return httpClient.send(request, HttpResponse.BodyHandlers.ofString());

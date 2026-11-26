@@ -20,19 +20,10 @@ public class ObjectIntegrityVerifier {
     private final S3Properties s3Properties;
 
     /**
-     * Verifies final object size, full-object CRC32C checksum (when present/expected),
+     * Verifies final object size, full-object CRC32C checksum against {@code expectedChecksum},
      * and container magic-byte signature via a bounded range read without proxying the file.
      */
-    public VerifiedObject verifyCommittedObject(StorageObjectEntity entity, String computedCompositeCrc32c) {
-        return verifyCommittedObject(entity, computedCompositeCrc32c, null);
-    }
-
-    /**
-     * Verifies final object size, full-object CRC32C checksum (when present/expected),
-     * and container magic-byte signature via a bounded range read without proxying the file.
-     */
-    public VerifiedObject verifyCommittedObject(
-            StorageObjectEntity entity, String computedCompositeCrc32c, String expectedChecksum) {
+    public VerifiedObject verifyCommittedObject(StorageObjectEntity entity, String expectedChecksum) {
         ObjectMetadata metadata = objectStorageProvider.headObject(entity.getBucket(), entity.getObjectKey())
                 .orElseThrow(() -> ApiException.storageUnavailable("Completed object could not be verified", null));
 
@@ -40,24 +31,17 @@ public class ObjectIntegrityVerifier {
             throw ApiException.sizeMismatch(entity.getDeclaredSize(), metadata.sizeBytes());
         }
 
-        String authoritativeChecksum = metadata.checksumCrc32c() != null
-                ? metadata.checksumCrc32c()
-                : computedCompositeCrc32c;
-
-        if (expectedChecksum != null && !expectedChecksum.isBlank()) {
-            if (authoritativeChecksum == null || !expectedChecksum.equals(authoritativeChecksum)) {
-                throw ApiException.checksumMismatch(
-                        "Verified object CRC32C (" + authoritativeChecksum
-                                + ") does not match expected checksum (" + expectedChecksum + ")");
-            }
+        if (s3Properties.fullObjectChecksumEnabled() && metadata.checksumCrc32c() == null) {
+            throw ApiException.checksumMismatch(
+                    "Object storage did not return full-object CRC32C checksum");
         }
 
-        if (metadata.checksumCrc32c() != null
-                && computedCompositeCrc32c != null
-                && !metadata.checksumCrc32c().equals(computedCompositeCrc32c)) {
+        if (expectedChecksum != null
+                && metadata.checksumCrc32c() != null
+                && !metadata.checksumCrc32c().equals(expectedChecksum)) {
             throw ApiException.checksumMismatch(
                     "Object storage CRC32C (" + metadata.checksumCrc32c()
-                            + ") does not match combined part CRC32C (" + computedCompositeCrc32c + ")");
+                            + ") does not match expected CRC32C (" + expectedChecksum + ")");
         }
 
         long maxEnd = Math.min((long) s3Properties.headerInspectBytes() - 1L, metadata.sizeBytes() - 1L);
@@ -65,6 +49,9 @@ public class ObjectIntegrityVerifier {
                 entity.getBucket(), entity.getObjectKey(), 0L, maxEnd);
         MediaSignatureVerifier.verify(entity.getContentType(), headerBytes);
 
+        String authoritativeChecksum = metadata.checksumCrc32c() != null
+                ? metadata.checksumCrc32c()
+                : expectedChecksum;
         String finalChecksum = authoritativeChecksum != null ? authoritativeChecksum : metadata.etag();
         String algorithm = authoritativeChecksum != null ? "CRC32C" : null;
         return new VerifiedObject(metadata.sizeBytes(), metadata.etag(), finalChecksum, algorithm);

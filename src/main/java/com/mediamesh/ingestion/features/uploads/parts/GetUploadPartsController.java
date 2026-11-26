@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * endpoint for fetching resumable presigned part URLs.
+ * Endpoint for listing uploaded multipart parts and their CRC32C checksums for resume.
  */
 @RestController
 @RequestMapping("/api/v1/uploads")
@@ -23,14 +23,13 @@ public class GetUploadPartsController {
     private final GetUploadPartsHandler handler;
 
     @GetMapping("/{uploadId}/parts")
-    public ResponseEntity<PartsBatchResponse> getPartsBatch(
+    public ResponseEntity<PartsBatchResponse> listUploadedParts(
             @RequestHeader(IdentityHeaderResolver.USER_ID_HEADER) String userIdHeader,
             @PathVariable UUID uploadId,
-            @RequestParam(defaultValue = "1") int from,
-            @RequestParam(defaultValue = "20") int to,
-            @RequestParam(defaultValue = "true") boolean includeUploaded) {
+            @RequestParam(required = false) Integer partNumberMarker,
+            @RequestParam(defaultValue = "1000") int maxParts) {
         UUID userId = IdentityHeaderResolver.parseUserId(userIdHeader);
-        PartsBatchResponse response = handler.handle(uploadId, userId, from, to, includeUploaded);
+        PartsBatchResponse response = handler.handle(uploadId, userId, partNumberMarker, maxParts);
 
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())

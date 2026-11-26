@@ -10,12 +10,17 @@ import com.mediamesh.ingestion.features.media.delete.DeleteMediaHandler;
 import com.mediamesh.ingestion.features.uploads.abort.AbortUploadHandler;
 import com.mediamesh.ingestion.features.uploads.complete.CompleteUploadHandler;
 import com.mediamesh.ingestion.features.uploads.complete.CompleteUploadRequest;
+import com.mediamesh.ingestion.features.uploads.complete.CompleteUploadRequest.PartChecksumDto;
 import com.mediamesh.ingestion.features.uploads.complete.CompleteUploadResponse;
 import com.mediamesh.ingestion.features.uploads.init.InitUploadHandler;
 import com.mediamesh.ingestion.features.uploads.init.InitUploadRequest;
 import com.mediamesh.ingestion.features.uploads.init.InitUploadResponse;
 import com.mediamesh.ingestion.features.uploads.parts.GetUploadPartsHandler;
 import com.mediamesh.ingestion.features.uploads.parts.PartsBatchResponse;
+import com.mediamesh.ingestion.features.uploads.presign.PresignPartsHandler;
+import com.mediamesh.ingestion.features.uploads.presign.PresignPartsRequest;
+import com.mediamesh.ingestion.features.uploads.presign.PresignPartsRequest.PartPresignSpec;
+import com.mediamesh.ingestion.features.uploads.presign.PresignPartsResponse;
 import com.mediamesh.ingestion.storage.PartGeometry;
 import com.mediamesh.ingestion.storage.persistence.CleanupKind;
 import com.mediamesh.ingestion.storage.persistence.StorageCleanupEntity;
@@ -60,6 +65,9 @@ class UploadSlicesIntegrationTest {
     private InitUploadHandler initHandler;
 
     @Autowired
+    private PresignPartsHandler presignPartsHandler;
+
+    @Autowired
     private GetUploadPartsHandler partsHandler;
 
     @Autowired
@@ -93,31 +101,41 @@ class UploadSlicesIntegrationTest {
 
         byte[] part1 = mp4Bytes(8 * MIB, (byte) 0x1A);
         byte[] part2 = filledBytes(4 * MIB, (byte) 0x2B);
+        String crc1 = Crc32cCombiner.computeBase64(part1);
+        String crc2 = Crc32cCombiner.computeBase64(part2);
         String fullCrc32c = Crc32cCombiner.combineBase64(List.of(
-                new PartChecksum(Crc32cCombiner.computeBase64(part1), part1.length),
-                new PartChecksum(Crc32cCombiner.computeBase64(part2), part2.length)));
+                new PartChecksum(crc1, part1.length),
+                new PartChecksum(crc2, part2.length)));
 
         InitUploadResponse allocated = initHandler.handle(userId, new InitUploadRequest(
                 groupId, libraryId, "vacation.mp4", "Vacation", "video/mp4", 12L * MIB));
 
         assertThat(allocated.totalParts()).isEqualTo(2);
         assertThat(allocated.partSizeBytes()).isEqualTo(8L * MIB);
-        assertThat(allocated.parts()).hasSize(2);
-        assertThat(allocated.parts().get(0).expectedSizeBytes()).isEqualTo(8L * MIB);
-        assertThat(allocated.parts().get(1).expectedSizeBytes()).isEqualTo(4L * MIB);
+        assertThat(allocated.recommendedConcurrency()).isEqualTo(4);
 
-        putPresigned(allocated.parts().get(0).url(), part1);
+        PresignPartsResponse presign1 = presignPartsHandler.handle(
+                allocated.uploadId(), userId, new PresignPartsRequest(List.of(new PartPresignSpec(1, crc1))));
+        putPresigned(presign1.parts().get(0).url(), part1, crc1);
 
-        PartsBatchResponse batch = partsHandler.handle(allocated.uploadId(), userId, 2, 2);
-        assertThat(batch.uploadedParts()).containsExactly(1);
-        assertThat(batch.parts()).hasSize(1);
-        assertThat(batch.parts().get(0).expectedSizeBytes()).isEqualTo(4L * MIB);
+        PartsBatchResponse batch = partsHandler.handle(allocated.uploadId(), userId);
+        assertThat(batch.uploadedParts()).hasSize(1);
+        assertThat(batch.uploadedParts().get(0).partNumber()).isEqualTo(1);
+        assertThat(batch.uploadedParts().get(0).size()).isEqualTo(8L * MIB);
 
-        putPresigned(batch.parts().get(0).url(), part2);
+        PresignPartsResponse presign2 = presignPartsHandler.handle(
+                allocated.uploadId(), userId, new PresignPartsRequest(List.of(new PartPresignSpec(2, crc2))));
+        putPresigned(presign2.parts().get(0).url(), part2, crc2);
 
-        CompleteUploadResponse committed = completeHandler.handle(allocated.uploadId(), userId);
+        CompleteUploadResponse committed = completeHandler.handle(
+                allocated.uploadId(),
+                userId,
+                new CompleteUploadRequest(fullCrc32c, List.of(
+                        new PartChecksumDto(1, crc1),
+                        new PartChecksumDto(2, crc2))));
         assertThat(committed.verifiedSizeBytes()).isEqualTo(12L * MIB);
         assertThat(committed.etag()).isNotBlank();
+        assertThat(committed.checksum()).isEqualTo(fullCrc32c);
 
         StorageObjectEntity persisted = storageObjectRepository.findById(allocated.uploadId()).orElseThrow();
         assertThat(persisted.getStatus()).isEqualTo(StorageObjectStatus.COMMITTED);
@@ -145,41 +163,73 @@ class UploadSlicesIntegrationTest {
 
         byte[] part1 = mp4Bytes(8 * MIB, (byte) 0x55);
         byte[] part2 = filledBytes(4 * MIB, (byte) 0x66);
-        putPresigned(allocated.parts().get(0).url(), part1);
+        String crc1 = Crc32cCombiner.computeBase64(part1);
+        String crc2 = Crc32cCombiner.computeBase64(part2);
+        String fullCrc = Crc32cCombiner.combineBase64(List.of(
+                new PartChecksum(crc1, part1.length),
+                new PartChecksum(crc2, part2.length)));
 
-        assertThatThrownBy(() -> completeHandler.handle(allocated.uploadId(), userId))
+        PresignPartsResponse presign1 = presignPartsHandler.handle(
+                allocated.uploadId(), userId, new PresignPartsRequest(List.of(new PartPresignSpec(1, crc1))));
+        putPresigned(presign1.parts().get(0).url(), part1, crc1);
+
+        CompleteUploadRequest completeReq = new CompleteUploadRequest(fullCrc, List.of(
+                new PartChecksumDto(1, crc1),
+                new PartChecksumDto(2, crc2)));
+
+        assertThatThrownBy(() -> completeHandler.handle(allocated.uploadId(), userId, completeReq))
                 .isInstanceOf(ApiException.class)
-                .extracting(e -> ((ApiException) e).getErrorCode())
-                .isEqualTo(ErrorCode.PARTS_MISSING);
+                .satisfies(e -> {
+                    ApiException ex = (ApiException) e;
+                    assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.PARTS_MISSING);
+                    assertThat(ex.getProperties()).containsEntry("missingParts", List.of(2));
+                });
 
         StorageObjectEntity stillPending = storageObjectRepository.findById(allocated.uploadId()).orElseThrow();
         assertThat(stillPending.getStatus()).isEqualTo(StorageObjectStatus.PENDING);
+        assertThat(stillPending.getChecksumMismatchCount()).isZero();
 
-        putPresigned(allocated.parts().get(1).url(), part2);
+        PresignPartsResponse presign2 = presignPartsHandler.handle(
+                allocated.uploadId(), userId, new PresignPartsRequest(List.of(new PartPresignSpec(2, crc2))));
+        putPresigned(presign2.parts().get(0).url(), part2, crc2);
 
-        CompleteUploadResponse committed = completeHandler.handle(allocated.uploadId(), userId);
+        CompleteUploadResponse committed = completeHandler.handle(allocated.uploadId(), userId, completeReq);
         assertThat(committed.verifiedSizeBytes()).isEqualTo(12L * MIB);
     }
 
     @Test
-    void completeWithTamperedChecksumFailsAndEnqueuesAbortCleanup() throws Exception {
+    void compositeMismatchRollsBackWithoutCountingRetryAndAllowsFixedComplete() throws Exception {
         UUID userId = UUID.randomUUID();
         InitUploadResponse allocated = initHandler.handle(userId, new InitUploadRequest(
-                UUID.randomUUID(), UUID.randomUUID(), "corrupt.mp4", null, "video/mp4", 8L * MIB));
+                UUID.randomUUID(), UUID.randomUUID(), "composite-bug.mp4", null, "video/mp4", 8L * MIB));
 
-        putPresigned(allocated.parts().get(0).url(), mp4Bytes(8 * MIB, (byte) 0x22));
+        byte[] part1 = mp4Bytes(8 * MIB, (byte) 0x33);
+        String realCrc = Crc32cCombiner.computeBase64(part1);
+        PresignPartsResponse presign = presignPartsHandler.handle(
+                allocated.uploadId(), userId, new PresignPartsRequest(List.of(new PartPresignSpec(1, realCrc))));
+        putPresigned(presign.parts().get(0).url(), part1, realCrc);
 
-        var tamperedRequest = new CompleteUploadRequest("AAAAAA==");
-        assertThatThrownBy(() -> completeHandler.handle(allocated.uploadId(), userId, tamperedRequest))
+        String wrongExpected = Crc32cCombiner.computeBase64(new byte[] {9, 9, 9, 9});
+        CompleteUploadRequest badComposite = new CompleteUploadRequest(
+                wrongExpected, List.of(new PartChecksumDto(1, realCrc)));
+
+        assertThatThrownBy(() -> completeHandler.handle(allocated.uploadId(), userId, badComposite))
                 .isInstanceOf(ApiException.class)
-                .extracting(e -> ((ApiException) e).getErrorCode())
-                .isEqualTo(ErrorCode.CHECKSUM_MISMATCH);
+                .satisfies(e -> {
+                    ApiException ex = (ApiException) e;
+                    assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.COMPOSITE_CHECKSUM_INVALID);
+                    assertThat(ex.getProperties()).containsEntry("badParts", List.of());
+                });
 
-        StorageObjectEntity failed = storageObjectRepository.findById(allocated.uploadId()).orElseThrow();
-        assertThat(failed.getStatus()).isEqualTo(StorageObjectStatus.FAILED);
-        assertThat(storageCleanupRepository.findAll().stream()
-                .anyMatch(c -> c.getObjectKey().equals(failed.getObjectKey())
-                        && c.getKind() == CleanupKind.ABORT_MP)).isTrue();
+        StorageObjectEntity stillPending = storageObjectRepository.findById(allocated.uploadId()).orElseThrow();
+        assertThat(stillPending.getStatus()).isEqualTo(StorageObjectStatus.PENDING);
+        assertThat(stillPending.getChecksumMismatchCount()).isZero();
+
+        CompleteUploadResponse committed = completeHandler.handle(
+                allocated.uploadId(),
+                userId,
+                new CompleteUploadRequest(realCrc, List.of(new PartChecksumDto(1, realCrc))));
+        assertThat(committed.verifiedSizeBytes()).isEqualTo(8L * MIB);
     }
 
     @Test
@@ -191,9 +241,16 @@ class UploadSlicesIntegrationTest {
         byte[] htmlPayload = filledBytes(8 * MIB, (byte) ' ');
         byte[] htmlHeader = "<html><body>not a video</body></html>".getBytes(StandardCharsets.UTF_8);
         System.arraycopy(htmlHeader, 0, htmlPayload, 0, htmlHeader.length);
-        putPresigned(allocated.parts().get(0).url(), htmlPayload);
+        String crc = Crc32cCombiner.computeBase64(htmlPayload);
 
-        assertThatThrownBy(() -> completeHandler.handle(allocated.uploadId(), userId))
+        PresignPartsResponse presign = presignPartsHandler.handle(
+                allocated.uploadId(), userId, new PresignPartsRequest(List.of(new PartPresignSpec(1, crc))));
+        putPresigned(presign.parts().get(0).url(), htmlPayload, crc);
+
+        assertThatThrownBy(() -> completeHandler.handle(
+                        allocated.uploadId(),
+                        userId,
+                        new CompleteUploadRequest(crc, List.of(new PartChecksumDto(1, crc)))))
                 .isInstanceOf(ApiException.class)
                 .extracting(e -> ((ApiException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_MEDIA_CONTAINER);
@@ -216,7 +273,11 @@ class UploadSlicesIntegrationTest {
                 Timestamp.from(Instant.now().minus(5, ChronoUnit.MINUTES)),
                 allocated.uploadId());
 
-        assertThatThrownBy(() -> completeHandler.handle(allocated.uploadId(), userId))
+        String dummyCrc = Crc32cCombiner.computeBase64(new byte[] {1});
+        assertThatThrownBy(() -> completeHandler.handle(
+                        allocated.uploadId(),
+                        userId,
+                        new CompleteUploadRequest(dummyCrc, List.of(new PartChecksumDto(1, dummyCrc)))))
                 .isInstanceOf(ApiException.class)
                 .extracting(e -> ((ApiException) e).getErrorCode())
                 .isEqualTo(ErrorCode.GONE);
@@ -245,7 +306,14 @@ class UploadSlicesIntegrationTest {
         InitUploadResponse allocated = initHandler.handle(userId, new InitUploadRequest(
                 UUID.randomUUID(), UUID.randomUUID(), "race.mp4", null, "video/mp4", 8L * MIB));
 
-        putPresigned(allocated.parts().get(0).url(), mp4Bytes(8 * MIB, (byte) 0x77));
+        byte[] bytes = mp4Bytes(8 * MIB, (byte) 0x77);
+        String crc = Crc32cCombiner.computeBase64(bytes);
+        PresignPartsResponse presign = presignPartsHandler.handle(
+                allocated.uploadId(), userId, new PresignPartsRequest(List.of(new PartPresignSpec(1, crc))));
+        putPresigned(presign.parts().get(0).url(), bytes, crc);
+
+        CompleteUploadRequest completeReq = new CompleteUploadRequest(
+                crc, List.of(new PartChecksumDto(1, crc)));
 
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
@@ -257,7 +325,7 @@ class UploadSlicesIntegrationTest {
                 ready.countDown();
                 start.await();
                 try {
-                    return completeHandler.handle(allocated.uploadId(), userId);
+                    return completeHandler.handle(allocated.uploadId(), userId, completeReq);
                 } catch (ApiException ex) {
                     return ex.getErrorCode();
                 }
@@ -278,9 +346,10 @@ class UploadSlicesIntegrationTest {
                         .isIn(ErrorCode.COMMIT_IN_PROGRESS, ErrorCode.CONFLICT));
     }
 
-    private void putPresigned(String url, byte[] bytes) throws Exception {
+    private void putPresigned(String url, byte[] bytes, String crc32c) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
+                .header("x-amz-checksum-crc32c", crc32c)
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(bytes))
                 .build();
         HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());

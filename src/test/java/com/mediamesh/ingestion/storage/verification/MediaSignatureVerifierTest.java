@@ -19,10 +19,13 @@ class MediaSignatureVerifierTest {
         byte[] flac = new byte[] {'f', 'L', 'a', 'C', 0x00, 0x00, 0x00, 0x22};
 
         assertThatCode(() -> MediaSignatureVerifier.verify("video/mp4", mp4)).doesNotThrowAnyException();
+        assertThatCode(() -> MediaSignatureVerifier.verify("video/mp4; codecs=\"avc1.42E01E\"", mp4))
+                .doesNotThrowAnyException();
         assertThatCode(() -> MediaSignatureVerifier.verify("video/webm", webm)).doesNotThrowAnyException();
         assertThatCode(() -> MediaSignatureVerifier.verify("image/png", png)).doesNotThrowAnyException();
         assertThatCode(() -> MediaSignatureVerifier.verify("image/jpeg", jpeg)).doesNotThrowAnyException();
         assertThatCode(() -> MediaSignatureVerifier.verify("audio/flac", flac)).doesNotThrowAnyException();
+        assertThatCode(() -> MediaSignatureVerifier.verify(null, png)).doesNotThrowAnyException();
     }
 
     @Test
@@ -36,6 +39,11 @@ class MediaSignatureVerifierTest {
                 .isEqualTo(ErrorCode.INVALID_MEDIA_CONTAINER);
 
         assertThatThrownBy(() -> MediaSignatureVerifier.verify("video/mp4", png))
+                .isInstanceOf(ApiException.class)
+                .extracting(e -> ((ApiException) e).getErrorCode())
+                .isEqualTo(ErrorCode.INVALID_MEDIA_CONTAINER);
+
+        assertThatThrownBy(() -> MediaSignatureVerifier.verify("video/mp4", new byte[] {0x00, 0x01}))
                 .isInstanceOf(ApiException.class)
                 .extracting(e -> ((ApiException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_MEDIA_CONTAINER);

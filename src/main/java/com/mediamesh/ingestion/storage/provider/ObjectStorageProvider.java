@@ -3,6 +3,7 @@ package com.mediamesh.ingestion.storage.provider;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -19,7 +20,7 @@ public interface ObjectStorageProvider {
 
     /**
      * Generates a short-lived presigned PUT URL for uploading a single multipart part
-     * with an exact signed {@code Content-Length}.
+     * with an exact signed {@code Content-Length} and {@code x-amz-checksum-crc32c}.
      */
     PresignedPartUrl presignPart(
             String bucket,
@@ -27,7 +28,18 @@ public interface ObjectStorageProvider {
             String providerUploadId,
             int partNumber,
             long expectedSizeBytes,
+            String crc32c,
             Duration ttl);
+
+    /**
+     * Lists a single page of parts currently stored by the provider for an in-progress multipart upload.
+     */
+    UploadedPartsPage listPartsPage(
+            String bucket,
+            String objectKey,
+            String providerUploadId,
+            Integer partNumberMarker,
+            int maxParts);
 
     /**
      * Lists all parts currently stored by the provider for an in-progress multipart upload.
@@ -75,8 +87,11 @@ public interface ObjectStorageProvider {
      */
     void deletePrefix(String bucket, String prefix);
 
-    /** Presigned part upload URL and its expiration timestamp. */
-    record PresignedPartUrl(String url, Instant expiresAt) {}
+    /** Presigned part upload URL, required signed headers, and its expiration timestamp. */
+    record PresignedPartUrl(String url, Map<String, String> headers, Instant expiresAt) {}
+
+    /** Paginated part listing result from the object storage provider. */
+    record UploadedPartsPage(List<UploadedPart> parts, Integer nextPartNumberMarker, boolean truncated) {}
 
     /** Part metadata reported by the object storage provider. */
     record UploadedPart(int partNumber, long sizeBytes, String etag, String checksumCrc32c) {}

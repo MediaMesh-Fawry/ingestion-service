@@ -2,14 +2,12 @@ package com.mediamesh.ingestion.storage;
 
 import com.mediamesh.ingestion.common.exception.ApiException;
 import com.mediamesh.ingestion.config.S3Properties;
-import com.mediamesh.ingestion.features.uploads.PresignedPartDto;
 import com.mediamesh.ingestion.storage.persistence.StorageObjectEntity;
 import com.mediamesh.ingestion.storage.persistence.StorageObjectRepository;
-import com.mediamesh.ingestion.storage.provider.ObjectStorageProvider;
-import com.mediamesh.ingestion.storage.provider.ObjectStorageProvider.PresignedPartUrl;
-import java.util.ArrayList;
-import java.util.List;
+import com.mediamesh.ingestion.storage.persistence.StorageObjectStatus;
+import java.time.Instant;
 import java.util.UUID;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Shared helpers reused across upload handlers.
@@ -40,28 +38,32 @@ public final class UploadSupport {
     }
 
     /**
-     * Generates presigned part URLs for an inclusive 1-based part range,
-     * signing each URL with its exact expected {@code Content-Length}.
+     * Validates that the upload session is still {@code PENDING} and not expired.
      */
-    public static List<PresignedPartDto> presignRange(
-            ObjectStorageProvider objectStorageProvider,
-            S3Properties s3Properties,
-            String bucket,
-            String objectKey,
-            String providerUploadId,
-            long declaredSizeBytes,
-            long partSizeBytes,
-            int totalParts,
-            int fromPart,
-            int toPart) {
-        List<PresignedPartDto> result = new ArrayList<>(toPart - fromPart + 1);
-        for (int partNumber = fromPart; partNumber <= toPart; partNumber++) {
-            long expectedSize = PartGeometry.expectedPartSize(
-                    declaredSizeBytes, partSizeBytes, totalParts, partNumber);
-            PresignedPartUrl presigned = objectStorageProvider.presignPart(
-                    bucket, objectKey, providerUploadId, partNumber, expectedSize, s3Properties.presignTtl());
-            result.add(new PresignedPartDto(partNumber, presigned.url(), presigned.expiresAt(), expectedSize));
+    public static void requireUploadAcceptingParts(StorageObjectEntity entity, Instant now) {
+        if (entity.getStatus() == StorageObjectStatus.EXPIRED
+                || entity.getStatus() == StorageObjectStatus.ABORTED
+                || (entity.getStatus() == StorageObjectStatus.PENDING && !entity.getExpiresAt().isAfter(now))) {
+            throw ApiException.gone("Upload session is no longer active");
         }
-        return result;
+        if (entity.getStatus() != StorageObjectStatus.PENDING) {
+            throw ApiException.conflict("Upload is not accepting parts in state: " + entity.getStatus());
+        }
+    }
+
+    /**
+     * Slides {@code expires_at} forward by {@code uploadTtl}, capped at {@code createdAt + maxUploadLifetime}.
+     */
+    public static void slideUploadExpiration(
+            StorageObjectRepository storageObjectRepository,
+            TransactionTemplate transactionTemplate,
+            StorageObjectEntity entity,
+            S3Properties s3Properties,
+            Instant now) {
+        Instant maxExpiresAt = entity.getCreatedAt().plus(s3Properties.maxUploadLifetime());
+        Instant candidateExpiresAt = now.plus(s3Properties.uploadTtl());
+        Instant newExpiresAt = candidateExpiresAt.isAfter(maxExpiresAt) ? maxExpiresAt : candidateExpiresAt;
+        transactionTemplate.executeWithoutResult(
+                status -> storageObjectRepository.slideExpiresAt(entity.getUploadId(), newExpiresAt, now));
     }
 }

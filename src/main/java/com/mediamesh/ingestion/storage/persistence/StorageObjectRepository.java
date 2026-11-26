@@ -51,22 +51,50 @@ public interface StorageObjectRepository extends JpaRepository<StorageObjectEnti
     @Query("""
             UPDATE StorageObjectEntity s
             SET s.status = com.mediamesh.ingestion.storage.persistence.StorageObjectStatus.COMMITTING,
+                s.expectedChecksum = :expectedChecksum,
                 s.updatedAt = :now
             WHERE s.uploadId = :uploadId
               AND s.status = com.mediamesh.ingestion.storage.persistence.StorageObjectStatus.PENDING
               AND s.expiresAt > :now
             """)
-    int claimForCommit(@Param("uploadId") UUID uploadId, @Param("now") Instant now);
+    int claimForCommit(
+            @Param("uploadId") UUID uploadId,
+            @Param("expectedChecksum") String expectedChecksum,
+            @Param("now") Instant now);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             UPDATE StorageObjectEntity s
             SET s.status = com.mediamesh.ingestion.storage.persistence.StorageObjectStatus.PENDING,
+                s.expectedChecksum = null,
                 s.updatedAt = :now
             WHERE s.uploadId = :uploadId
               AND s.status = com.mediamesh.ingestion.storage.persistence.StorageObjectStatus.COMMITTING
             """)
     int rollbackCommitToPending(@Param("uploadId") UUID uploadId, @Param("now") Instant now);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE StorageObjectEntity s
+            SET s.status = com.mediamesh.ingestion.storage.persistence.StorageObjectStatus.PENDING,
+                s.checksumMismatchCount = s.checksumMismatchCount + 1,
+                s.expectedChecksum = null,
+                s.updatedAt = :now
+            WHERE s.uploadId = :uploadId
+              AND s.status = com.mediamesh.ingestion.storage.persistence.StorageObjectStatus.COMMITTING
+            """)
+    int incrementMismatchAndRollback(@Param("uploadId") UUID uploadId, @Param("now") Instant now);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE StorageObjectEntity s
+            SET s.status = com.mediamesh.ingestion.storage.persistence.StorageObjectStatus.FAILED,
+                s.checksumMismatchCount = s.checksumMismatchCount + 1,
+                s.updatedAt = :now
+            WHERE s.uploadId = :uploadId
+              AND s.status = com.mediamesh.ingestion.storage.persistence.StorageObjectStatus.COMMITTING
+            """)
+    int incrementMismatchAndFail(@Param("uploadId") UUID uploadId, @Param("now") Instant now);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
