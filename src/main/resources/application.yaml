@@ -34,14 +34,14 @@ storage:
     raw-bucket: ${STORAGE_RAW_BUCKET:mediamesh-raw}
     processed-bucket: ${STORAGE_PROCESSED_BUCKET:mediamesh-processed}
     path-style-access: ${STORAGE_PATH_STYLE:true}
-    full-object-checksum-enabled: ${STORAGE_FULL_OBJECT_CHECKSUM_ENABLED:false}
+    full-object-checksum-enabled: ${STORAGE_FULL_OBJECT_CHECKSUM_ENABLED:true}
     presign-ttl: ${STORAGE_PRESIGN_TTL:20m}
     upload-ttl: ${STORAGE_UPLOAD_TTL:24h}
     max-upload-lifetime: ${STORAGE_MAX_UPLOAD_LIFETIME:7d}
     max-object-size-bytes: ${STORAGE_MAX_OBJECT_SIZE_BYTES:5497558138880}
     header-inspect-bytes: ${STORAGE_HEADER_INSPECT_BYTES:65536}
   cleanup:
-    enabled: ${STORAGE_CLEANUP_ENABLED:true}
+    enabled: ${STORAGE_CLEANUP_ENABLED:false}
     poll-interval: ${STORAGE_CLEANUP_POLL_INTERVAL:30s}
     batch-size: ${STORAGE_CLEANUP_BATCH_SIZE:50}
     lease-duration: ${STORAGE_CLEANUP_LEASE_DURATION:2m}

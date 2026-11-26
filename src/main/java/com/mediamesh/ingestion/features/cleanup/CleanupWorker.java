@@ -54,7 +54,8 @@ public class CleanupWorker {
     }
 
     /**
-     * Claims due {@code storage_cleanup} rows with a lease, executes S3 cleanup outside DB transactions,
+     * Claims due {@code storage_cleanup} rows with a lease, executes S3 cleanup
+     * outside DB transactions,
      * and deletes succeeded rows or reschedules failures with exponential backoff.
      */
     public int drainCleanupQueue() {
@@ -65,7 +66,7 @@ public class CleanupWorker {
                 status -> storageCleanupRepository.claimDueTasksWithLease(
                         now, leaseUntil, properties.batchSize()));
 
-        if (claimed == null || claimed.isEmpty()) {
+        if (claimed == null || claimed.isEmpty()) { // null is defensive no actual claim, empty is no due tasks
             return 0;
         }
 
@@ -98,7 +99,8 @@ public class CleanupWorker {
     }
 
     /**
-     * Transitions expired {@code PENDING} uploads to {@code EXPIRED} and enqueues {@code ABORT_MP}.
+     * Transitions expired {@code PENDING} uploads to {@code EXPIRED} and enqueues
+     * {@code ABORT_MP}.
      */
     public int expireStaleUploads() {
         Instant now = Instant.now();
@@ -135,7 +137,8 @@ public class CleanupWorker {
     }
 
     /**
-     * Reconciles {@code COMMITTING} rows that exceeded {@code stuckCommitAfter} against S3 {@code headObject}.
+     * Reconciles {@code COMMITTING} rows that exceeded {@code stuckCommitAfter}
+     * against S3 {@code headObject}.
      */
     public int recoverStuckCommits() {
         Instant now = Instant.now();
@@ -151,7 +154,8 @@ public class CleanupWorker {
             VerifiedObject verified = null;
             if (metadata.isPresent()) {
                 try {
-                    verified = objectIntegrityVerifier.verifyCommittedObject(entity, null);
+                    verified = objectIntegrityVerifier.verifyCommittedObject(
+                            entity, entity.getExpectedChecksum());
                 } catch (ApiException ex) {
                     if (ex.getErrorCode() == ErrorCode.STORAGE_UNAVAILABLE) {
                         log.warn(
@@ -169,8 +173,8 @@ public class CleanupWorker {
 
             if (verified != null) {
                 VerifiedObject finalVerified = verified;
-                boolean committed = Boolean.TRUE.equals(transactionTemplate.execute(status ->
-                        storageObjectRepository.markCommittedWithActualSize(
+                boolean committed = Boolean.TRUE.equals(
+                        transactionTemplate.execute(status -> storageObjectRepository.markCommittedWithActualSize(
                                 entity.getUploadId(),
                                 finalVerified.sizeBytes(),
                                 finalVerified.etag(),
